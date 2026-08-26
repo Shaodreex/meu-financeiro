@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Financeiro" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="description" content="Controle financeiro pessoal simples, privado e local-first." />
+  <title>Meu Financeiro</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">MF</div>
+        <div>
+          <strong>Meu Financeiro</strong>
+          <span>controle pessoal</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Navegação principal">
+        <button class="nav-item active" data-view="dashboard"><span>⌂</span> Visão geral</button>
+        <button class="nav-item" data-view="transactions"><span>↕</span> Lançamentos</button>
+        <button class="nav-item" data-view="recurring"><span>↻</span> Recorrentes</button>
+        <button class="nav-item" data-view="accounts"><span>◫</span> Recursos</button>
+        <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="privacy-note"><span>●</span> Seus dados ficam neste dispositivo</div>
+        <button id="installBtn" class="btn btn-secondary full hidden">Instalar aplicativo</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="icon-btn mobile-only" aria-label="Abrir menu">☰</button>
+        <div>
+          <p class="eyebrow">FINANÇAS PESSOAIS</p>
+          <h1 id="pageTitle">Visão geral</h1>
+        </div>
+        <div class="top-actions">
+          <label class="month-select"><span>Mês</span><input id="monthFilter" type="month" /></label>
+          <button class="btn btn-primary" id="quickAddBtn">＋ Novo lançamento</button>
+        </div>
+      </header>
+
+      <section id="dashboard" class="view active">
+        <div class="hero-grid">
+          <article class="card hero-card">
+            <div class="card-head"><span>Saldo disponível</span><span class="pill">posição atual</span></div>
+            <strong class="hero-value" id="availableBalance">R$ 0,00</strong>
+            <p>Recursos cadastrados na aba “Recursos”.</p>
+          </article>
+          <article class="card metric-card">
+            <span>Receitas no mês</span>
+            <strong id="monthIncome">R$ 0,00</strong>
+            <small id="incomeCount">0 recebimentos</small>
+          </article>
+          <article class="card metric-card">
+            <span>Despesas no mês</span>
+            <strong id="monthExpense">R$ 0,00</strong>
+            <small id="expenseCount">0 pagamentos</small>
+          </article>
+          <article class="card metric-card warning">
+            <span>Pendente</span>
+            <strong id="monthPending">R$ 0,00</strong>
+            <small id="pendingCount">0 contas</small>
+          </article>
+        </div>
+
+        <div class="content-grid">
+          <article class="card chart-card">
+            <div class="section-title">
+              <div><p class="eyebrow">DISTRIBUIÇÃO</p><h2>Gastos por categoria</h2></div>
+              <strong id="monthBalance" class="balance-chip">Saldo do mês R$ 0,00</strong>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="categoryChart" width="760" height="290" aria-label="Gráfico de gastos por categoria"></canvas>
+              <div id="emptyChart" class="empty-chart hidden">Adicione despesas pagas para visualizar o gráfico.</div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div><p class="eyebrow">PRÓXIMOS</p><h2>Contas pendentes</h2></div>
+              <button class="text-btn" data-go="transactions">Ver todas</button>
+            </div>
+            <div id="pendingList" class="compact-list"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="section-title">
+            <div><p class="eyebrow">MOVIMENTAÇÃO</p><h2>Últimos lançamentos</h2></div>
+            <button class="text-btn" data-go="transactions">Abrir lançamentos</button>
+          </div>
+          <div id="recentTransactions" class="transaction-list"></div>
+        </article>
+      </section>
+
+      <section id="transactions" class="view">
+        <div class="toolbar card">
+          <div class="search-field"><span>⌕</span><input id="transactionSearch" type="search" placeholder="Buscar descrição ou categoria" /></div>
+          <select id="typeFilter"><option value="">Todos os tipos</option><option value="expense">Despesas</option><option value="income">Receitas</option></select>
+          <select id="statusFilter"><option value="">Todos os status</option><option value="paid">Pago / Recebido</option><option value="pending">Pendente</option></select>
+          <button class="btn btn-secondary" id="exportCsvBtn">Exportar CSV</button>
+        </div>
+        <div class="card table-card">
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Forma</th><th>Status</th><th class="right">Valor</th><th></th></tr></thead>
+              <tbody id="transactionsTable"></tbody>
+            </table>
+          </div>
+          <div id="transactionsEmpty" class="empty-state hidden"><strong>Nenhum lançamento encontrado.</strong><span>Use “Novo lançamento” para registrar uma movimentação.</span></div>
+        </div>
+      </section>
+
+      <section id="recurring" class="view">
+        <div class="page-actions">
+          <div><p>Cadastre salário, aluguel, assinaturas e outras movimentações que se repetem.</p></div>
+          <div class="button-row"><button class="btn btn-secondary" id="generateRecurringBtn">Gerar lançamentos deste mês</button><button class="btn btn-primary" id="addRecurringBtn">＋ Nova recorrência</button></div>
+        </div>
+        <div id="recurringGrid" class="cards-grid"></div>
+        <div id="recurringEmpty" class="card empty-state hidden"><strong>Nenhuma recorrência cadastrada.</strong><span>Cadastre seus gastos fixos para agilizar o mês.</span></div>
+      </section>
+
+      <section id="accounts" class="view">
+        <div class="page-actions">
+          <div><p>Mantenha aqui sua posição financeira atual. Esses valores alimentam o “Saldo disponível”.</p></div>
+          <button class="btn btn-primary" id="addAccountBtn">＋ Novo recurso</button>
+        </div>
+        <div class="account-summary card"><span>Total disponível</span><strong id="accountsTotal">R$ 0,00</strong></div>
+        <div id="accountsGrid" class="cards-grid"></div>
+      </section>
+
+      <section id="settings" class="view">
+        <div class="settings-grid">
+          <article class="card">
+            <p class="eyebrow">CATEGORIAS</p><h2>Categorias de despesas</h2>
+            <div id="categoryTags" class="tag-list"></div>
+            <form id="categoryForm" class="inline-form"><input id="newCategory" placeholder="Nova categoria" maxlength="40" required /><button class="btn btn-secondary" type="submit">Adicionar</button></form>
+          </article>
+          <article class="card">
+            <p class="eyebrow">SEGURANÇA DOS DADOS</p><h2>Backup e restauração</h2>
+            <p class="muted">Como esta versão não usa servidor, faça backups periódicos. O arquivo gerado contém todos os seus dados.</p>
+            <div class="stack"><button id="backupBtn" class="btn btn-secondary">Baixar backup</button><label class="btn btn-secondary file-label">Restaurar backup<input id="restoreInput" type="file" accept="application/json,.json" hidden /></label></div>
+          </article>
+          <article class="card danger-zone">
+            <p class="eyebrow">MANUTENÇÃO</p><h2>Reiniciar sistema</h2>
+            <p class="muted">Apaga os dados locais e volta ao estado inicial vazio.</p>
+            <button id="resetBtn" class="btn btn-danger">Restaurar dados iniciais</button>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+
+  <dialog id="transactionModal" class="modal">
+    <form id="transactionForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">MOVIMENTAÇÃO</p><h2 id="transactionModalTitle">Novo lançamento</h2></div><button type="button" class="icon-btn close-modal">×</button></div>
+      <input id="transactionId" type="hidden" />
+      <div class="type-switch"><label><input type="radio" name="txType" value="expense" checked /><span>Despesa</span></label><label><input type="radio" name="txType" value="income" /><span>Receita</span></label></div>
+      <div class="form-grid">
+        <label class="field"><span>Data</span><input id="txDate" type="date" required /></label>
+        <label class="field"><span>Valor</span><input id="txAmount" inputmode="decimal" placeholder="0,00" required /></label>
+        <label class="field full"><span>Descrição</span><input id="txDescription" maxlength="80" placeholder="Ex.: Mercado, salário, combustível" required /></label>
+        <label class="field"><span>Categoria</span><select id="txCategory" required></select></label>
+        <label class="field"><span>Forma de pagamento</span><select id="txPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field"><span>Status</span><select id="txStatus"><option value="paid">Pago / Recebido</option><option value="pending">Pendente</option></select></label>
+        <label class="field"><span>Vencimento</span><input id="txDueDate" type="date" /></label>
+        <label class="field full"><span>Observação</span><textarea id="txNotes" rows="2" maxlength="180" placeholder="Opcional"></textarea></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal">Cancelar</button><button type="submit" class="btn btn-primary">Salvar lançamento</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="recurringModal" class="modal">
+    <form id="recurringForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">AUTOMAÇÃO</p><h2 id="recurringModalTitle">Nova recorrência</h2></div><button type="button" class="icon-btn close-recurring">×</button></div>
+      <input id="recurringId" type="hidden" />
+      <div class="form-grid">
+        <label class="field"><span>Tipo</span><select id="recType"><option value="expense">Despesa</option><option value="income">Receita</option></select></label>
+        <label class="field"><span>Dia do mês</span><input id="recDay" type="number" min="1" max="31" required /></label>
+        <label class="field full"><span>Descrição</span><input id="recDescription" required maxlength="80" /></label>
+        <label class="field"><span>Categoria</span><select id="recCategory" required></select></label>
+        <label class="field"><span>Valor</span><input id="recAmount" inputmode="decimal" required /></label>
+        <label class="field"><span>Forma</span><select id="recPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field checkbox-field"><input id="recActive" type="checkbox" checked /><span>Recorrência ativa</span></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary close-recurring">Cancelar</button><button type="submit" class="btn btn-primary">Salvar recorrência</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="accountModal" class="modal small-modal">
+    <form id="accountForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">RECURSOS</p><h2 id="accountModalTitle">Novo recurso</h2></div><button type="button" class="icon-btn close-account">×</button></div>
+      <input id="accountId" type="hidden" />
+      <div class="form-grid one-col">
+        <label class="field"><span>Nome</span><input id="accountName" required maxlength="50" placeholder="Ex.: Conta corrente" /></label>
+        <label class="field"><span>Valor disponível</span><input id="accountBalance" inputmode="decimal" required /></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary close-account">Cancelar</button><button type="submit" class="btn btn-primary">Salvar</button></div>
+    </form>
+  </dialog>
+
+
+  <dialog id="iosInstallModal" class="modal small-modal install-modal">
+    <div class="install-help">
+      <div class="modal-head"><div><p class="eyebrow">IPHONE</p><h2>Instalar Meu Financeiro</h2></div><button type="button" class="icon-btn close-ios-install">×</button></div>
+      <p class="muted">Abra este endereço no <strong>Safari</strong>. Depois:</p>
+      <ol class="install-steps">
+        <li>Toque no botão <strong>Compartilhar</strong> do Safari.</li>
+        <li>Escolha <strong>Adicionar à Tela de Início</strong>.</li>
+        <li>Ative <strong>Abrir como App da Web</strong>.</li>
+        <li>Toque em <strong>Adicionar</strong>.</li>
+      </ol>
+      <p class="install-note">Depois disso, abra pelo ícone <strong>Financeiro</strong> na tela inicial.</p>
+      <div class="modal-actions"><button type="button" class="btn btn-primary close-ios-install">Entendi</button></div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
