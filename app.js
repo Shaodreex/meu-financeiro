@@ -55,7 +55,10 @@
     bindNavigation();
     bindModals();
     bindActions();
-    ensureRecurringForMonth(currentMonth(), true);
+    // Quando há Supabase configurado, espere a carga inicial da nuvem antes de
+    // gerar recorrências. Isso evita criar/alterar estado local enquanto o
+    // bootstrap ainda está trazendo a versão remota.
+    if (!isCloudConfigured()) ensureRecurringForMonth(currentMonth(), true);
     renderAll();
     registerPwa();
     bindCloudUi();
@@ -548,13 +551,17 @@
     };
     const idx=state.recurring.findIndex(x=>x.id===id);
     if(idx>=0)state.recurring[idx]=r;else state.recurring.push(r);
+
+    // A recorrência e o lançamento automático do mês precisam formar uma única
+    // alteração lógica. Monte tudo no estado primeiro e sincronize apenas uma vez.
+    ensureRecurringForMonth(selectedMonth(), true, false, false);
     saveState();
-    ensureRecurringForMonth(selectedMonth(),true);
+
     closeDialog(els.recurringModal);renderAll();
     toast(idx>=0?'Fixo/assinatura atualizado.':'Fixo/assinatura cadastrado.');
   }
   function deleteRecurring(id){const r=state.recurring.find(x=>x.id===id);if(!r||!confirm(`Excluir “${r.description}”? Os lançamentos já gerados serão mantidos.`))return;state.recurring=state.recurring.filter(x=>x.id!==id);saveState();renderAll();toast('Recorrência excluída.');}
-  function ensureRecurringForMonth(month,silent=false,includeManual=false){
+  function ensureRecurringForMonth(month,silent=false,includeManual=false,persist=true){
     if(!month)return 0;
     const [year,mo]=month.split('-').map(Number);
     let created=0;
@@ -577,7 +584,10 @@
       });
       created++;
     });
-    if(created){saveState();if(!silent)toast(`${created} lançamento(s) gerado(s) para ${monthLabel(month)}.`);}
+    if(created){
+      if(persist) saveState();
+      if(!silent)toast(`${created} lançamento(s) gerado(s) para ${monthLabel(month)}.`);
+    }
     return created;
   }
   function generateRecurringForMonth(){
@@ -828,21 +838,49 @@
 
   async function bootstrapCloudState() {
     if (!cloudClient || !cloudUser) return;
-    const { data, error } = await cloudClient.from('finance_states').select('state,updated_at').eq('user_id', cloudUser.id).maybeSingle();
-    if (error) throw error;
-    if (!data) {
-      const { data: inserted, error: insertError } = await cloudClient.from('finance_states').insert({ user_id: cloudUser.id, state }).select('updated_at').single();
-      if (insertError) throw insertError;
-      lastCloudUpdatedAt = inserted.updated_at;
+
+    const revisionAtStart = localRevision;
+    const dirtyAtStart = cloudDirty;
+    const stateSnapshot = clone(state);
+    cloudSyncing = true;
+
+    try {
+      const { data, error } = await cloudClient
+        .from('finance_states')
+        .select('state,updated_at')
+        .eq('user_id', cloudUser.id)
+        .maybeSingle();
+      if (error) throw error;
+
+      if (!data) {
+        const { data: inserted, error: insertError } = await cloudClient
+          .from('finance_states')
+          .insert({ user_id: cloudUser.id, state: stateSnapshot })
+          .select('updated_at')
+          .single();
+        if (insertError) throw insertError;
+        lastCloudUpdatedAt = inserted.updated_at;
+        if (localRevision === revisionAtStart) cloudDirty = false;
+        return;
+      }
+
+      // Se havia alteração local pendente antes da carga, ou o usuário alterou
+      // algo enquanto a consulta estava em andamento, nunca sobrescreva o local.
+      if (dirtyAtStart || cloudDirty || localRevision !== revisionAtStart) {
+        lastCloudUpdatedAt = data.updated_at;
+        cloudDirty = true;
+        return;
+      }
+
+      state = normalizeCloudState(data.state);
+      saveLocalState();
+      lastCloudUpdatedAt = data.updated_at;
       cloudDirty = false;
-      return;
+      renderAll();
+    } finally {
+      cloudSyncing = false;
+      if (cloudDirty) scheduleCloudPush();
     }
-    const candidate = normalizeCloudState(data.state);
-    state = candidate;
-    saveLocalState();
-    lastCloudUpdatedAt = data.updated_at;
-    cloudDirty = false;
-    renderAll();
   }
 
   function normalizeCloudState(candidate) {
@@ -894,9 +932,8 @@
   async function pullCloudState() {
     if (!cloudClient || !cloudUser || cloudDirty || !navigator.onLine || cloudSyncing) return;
 
-    // Guarda a revisão local antes da consulta. Uma edição feita enquanto o request
-    // estiver no ar nunca pode ser sobrescrita por uma resposta antiga da nuvem.
     const revisionAtStart = localRevision;
+    cloudSyncing = true;
     try {
       const { data, error } = await cloudClient
         .from('finance_states')
@@ -907,7 +944,6 @@
 
       if (cloudDirty || localRevision !== revisionAtStart) {
         setCloudStatus('Sincronizando alterações locais...', 'syncing');
-        scheduleCloudPush();
         return;
       }
 
@@ -917,18 +953,22 @@
       lastCloudUpdatedAt = data.updated_at;
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
-      setCloudStatus('Atualizado da nuvem', 'ok');
+      if (!cloudDirty) setCloudStatus('Atualizado da nuvem', 'ok');
     } catch (err) {
       console.warn('Falha ao buscar alterações:', err.message || err);
+    } finally {
+      cloudSyncing = false;
+      if (cloudDirty || localRevision !== revisionAtStart) scheduleCloudPush();
     }
   }
 
   async function syncNow() {
     if (!cloudClient || !cloudUser) { toast('Entre na sua conta para sincronizar.'); return; }
     if (!navigator.onLine) { setCloudStatus('Sem internet • dados salvos localmente', 'offline'); return; }
+    if (cloudSyncing) return;
     if (cloudDirty) await pushCloudState();
     else await pullCloudState();
-    if (!cloudDirty) setCloudStatus('Sincronizado', 'ok');
+    if (!cloudDirty && !cloudSyncing) setCloudStatus('Sincronizado', 'ok');
   }
 
   function startCloudPolling() {
