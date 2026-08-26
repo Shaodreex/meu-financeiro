@@ -47,3 +47,47 @@ body{min-height:100dvh;overflow-x:hidden;-webkit-tap-highlight-color:transparent
 /* Supabase / autenticação */
 .auth-gate{position:fixed;inset:0;z-index:200;background:linear-gradient(145deg,#0f172a,#1e293b);display:grid;place-items:center;padding:20px;padding-top:max(20px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom))}.auth-card{width:min(430px,100%);background:#fff;border-radius:22px;padding:28px;box-shadow:0 28px 80px rgba(0,0,0,.28)}.auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}.auth-brand .brand-mark{background:#0f172a;color:#fff}.auth-brand strong{display:block}.auth-brand span{display:block;color:#94a3b8;font-size:12px;margin-top:2px}.auth-card h1{font-size:25px;margin:5px 0 8px;letter-spacing:-.5px}.auth-form{display:grid;gap:13px;margin-top:20px}.auth-switch{width:100%;text-align:center;margin-top:14px}.auth-message{margin-top:14px;padding:11px 12px;border-radius:10px;background:#fff8e1;color:#854d0e;font-size:12px;line-height:1.5}.cloud-user{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#94a3b8;font-size:10px}.cloud-user span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cloud-user button{border:0;background:transparent;color:#cbd5e1;font-size:10px;padding:3px 0}.syncing .privacy-note span:first-child{animation:mf-pulse 1s infinite}.sync-error .privacy-note span:first-child{color:#f87171!important}.sync-offline .privacy-note span:first-child{color:#fbbf24!important}@keyframes mf-pulse{50%{opacity:.35}}
 @media(max-width:760px){.auth-card{padding:22px}.auth-card input{font-size:16px}}
+
+
+/* Cartões, faturas e recorrências avançadas */
+.mini-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:14px}
+.mini-summary{display:flex;flex-direction:column;gap:6px;min-height:116px;justify-content:center}
+.mini-summary>span{font-size:11px;color:var(--muted);font-weight:700}
+.mini-summary strong{font-size:22px;letter-spacing:-.45px}
+.mini-summary small{font-size:10px;color:#94a3b8;line-height:1.35}
+.invoice-panel{margin-top:14px}
+.invoice-list{display:grid;gap:10px}
+.invoice-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}
+.invoice-row-main strong{display:block;font-size:13px}
+.invoice-row-main span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.invoice-row-value{text-align:right}
+.invoice-row-value strong{display:block;font-size:14px}
+.invoice-row-value span{display:block;font-size:10px;color:var(--muted);margin-top:3px}
+.card-visual{background:linear-gradient(145deg,#111827,#334155);color:#fff;border:0;overflow:hidden;position:relative}
+.card-visual:after{content:"";position:absolute;width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,.06);right:-75px;top:-95px;pointer-events:none}
+.card-visual .data-card-head span,.card-visual .data-card-foot{color:#cbd5e1}
+.card-visual .mini-btn{color:#cbd5e1;position:relative;z-index:1}
+.card-visual .mini-btn:hover{background:rgba(255,255,255,.08)}
+.card-visual .status.paid{background:rgba(52,211,153,.16);color:#a7f3d0}
+.card-visual .status.pending{background:rgba(251,191,36,.15);color:#fde68a}
+.card-meta{display:flex;gap:6px;flex-wrap:wrap}
+.soft-chip{display:inline-flex;align-items:center;border-radius:99px;padding:5px 8px;font-size:10px;font-weight:750;background:#eef2f7;color:#475569}
+.card-visual .soft-chip{background:rgba(255,255,255,.09);color:#e2e8f0}
+.form-hint{grid-column:1/-1;padding:9px 11px;border-radius:10px;background:#f8fafc;border:1px solid #eef2f7;color:#64748b;font-size:11px;line-height:1.45}
+.recurring-meta{display:flex;gap:6px;flex-wrap:wrap}
+.recurring-kind{display:inline-flex;padding:5px 8px;border-radius:99px;font-size:10px;font-weight:800;background:#eef2f7;color:#475569}
+.recurring-kind.subscription,.recurring-kind.internet{background:#eef2ff;color:#4338ca}
+.recurring-kind.income{background:var(--green-bg);color:var(--green)}
+.installment-note{font-size:10px;color:#64748b;margin-top:3px}
+@media(max-width:1100px){.mini-summary-grid{grid-template-columns:1fr 1fr}.mini-summary-grid .mini-summary:last-child{grid-column:1/-1}}
+@media(max-width:760px){
+  .mini-summary-grid{grid-template-columns:1fr 1fr}
+  .invoice-row{grid-template-columns:1fr auto}
+  .invoice-row .row-actions{grid-column:1/-1;justify-content:flex-start}
+}
+@media(max-width:440px){
+  .mini-summary-grid{grid-template-columns:1fr}
+  .mini-summary-grid .mini-summary:last-child{grid-column:auto}
+  .invoice-row{grid-template-columns:1fr}
+  .invoice-row-value{text-align:left}
+}

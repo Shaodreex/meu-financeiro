@@ -57,7 +57,8 @@
       <nav class="nav" aria-label="Navegação principal">
         <button class="nav-item active" data-view="dashboard"><span>⌂</span> Visão geral</button>
         <button class="nav-item" data-view="transactions"><span>↕</span> Lançamentos</button>
-        <button class="nav-item" data-view="recurring"><span>↻</span> Recorrentes</button>
+        <button class="nav-item" data-view="recurring"><span>↻</span> Fixos e assinaturas</button>
+        <button class="nav-item" data-view="cards"><span>▣</span> Cartões e faturas</button>
         <button class="nav-item" data-view="accounts"><span>◫</span> Recursos</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
       </nav>
@@ -156,11 +157,36 @@
 
       <section id="recurring" class="view">
         <div class="page-actions">
-          <div><p>Cadastre salário, aluguel, assinaturas e outras movimentações que se repetem.</p></div>
-          <div class="button-row"><button class="btn btn-secondary" id="generateRecurringBtn">Gerar lançamentos deste mês</button><button class="btn btn-primary" id="addRecurringBtn">＋ Nova recorrência</button></div>
+          <div><p>Cadastre uma vez suas assinaturas, chip de internet, telefone, aluguel, salário e demais contas que se repetem.</p></div>
+          <div class="button-row"><button class="btn btn-secondary" id="generateRecurringBtn">Atualizar este mês</button><button class="btn btn-primary" id="addRecurringBtn">＋ Novo fixo / assinatura</button></div>
+        </div>
+        <div class="mini-summary-grid">
+          <article class="card mini-summary"><span>Fixos do mês</span><strong id="fixedExpenseTotal">R$ 0,00</strong><small>despesas recorrentes ativas</small></article>
+          <article class="card mini-summary"><span>Assinaturas e serviços</span><strong id="subscriptionTotal">R$ 0,00</strong><small>streaming, chip, internet e similares</small></article>
+          <article class="card mini-summary"><span>Receitas recorrentes</span><strong id="fixedIncomeTotal">R$ 0,00</strong><small>entradas mensais ativas</small></article>
         </div>
         <div id="recurringGrid" class="cards-grid"></div>
-        <div id="recurringEmpty" class="card empty-state hidden"><strong>Nenhuma recorrência cadastrada.</strong><span>Cadastre seus gastos fixos para agilizar o mês.</span></div>
+        <div id="recurringEmpty" class="card empty-state hidden"><strong>Nenhum gasto fixo ou assinatura cadastrado.</strong><span>Cadastre uma vez e o sistema pode gerar os próximos meses automaticamente.</span></div>
+      </section>
+
+      <section id="cards" class="view">
+        <div class="page-actions">
+          <div><p>Controle limites, fechamento, vencimento e acompanhe a fatura do mês selecionado.</p></div>
+          <button class="btn btn-primary" id="addCardBtn">＋ Novo cartão</button>
+        </div>
+        <div class="mini-summary-grid">
+          <article class="card mini-summary"><span>Faturas do mês</span><strong id="cardsInvoiceTotal">R$ 0,00</strong><small id="cardsInvoiceCount">0 cartões com movimento</small></article>
+          <article class="card mini-summary"><span>Em aberto</span><strong id="cardsOpenTotal">R$ 0,00</strong><small>faturas ainda não marcadas como pagas</small></article>
+          <article class="card mini-summary"><span>Limite cadastrado</span><strong id="cardsLimitTotal">R$ 0,00</strong><small>soma dos cartões ativos</small></article>
+        </div>
+        <div id="cardsGrid" class="cards-grid"></div>
+        <div id="cardsEmpty" class="card empty-state hidden"><strong>Nenhum cartão cadastrado.</strong><span>Cadastre seus cartões para controlar faturas e compras parceladas.</span></div>
+        <article class="card invoice-panel">
+          <div class="section-title">
+            <div><p class="eyebrow">FATURAS</p><h2 id="invoicePanelTitle">Faturas do mês</h2></div>
+          </div>
+          <div id="invoiceList" class="invoice-list"></div>
+        </article>
       </section>
 
       <section id="accounts" class="view">
@@ -181,7 +207,7 @@
           </article>
           <article class="card">
             <p class="eyebrow">SEGURANÇA DOS DADOS</p><h2>Backup e restauração</h2>
-            <p class="muted">Como esta versão não usa servidor, faça backups periódicos. O arquivo gerado contém todos os seus dados.</p>
+            <p class="muted">Mesmo com sincronização na nuvem, mantenha backups periódicos. O arquivo gerado contém todos os seus dados financeiros.</p>
             <div class="stack"><button id="backupBtn" class="btn btn-secondary">Baixar backup</button><label class="btn btn-secondary file-label">Restaurar backup<input id="restoreInput" type="file" accept="application/json,.json" hidden /></label></div>
           </article>
           <article class="card">
@@ -212,8 +238,11 @@
         <label class="field full"><span>Descrição</span><input id="txDescription" maxlength="80" placeholder="Ex.: Mercado, salário, combustível" required /></label>
         <label class="field"><span>Categoria</span><select id="txCategory" required></select></label>
         <label class="field"><span>Forma de pagamento</span><select id="txPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field hidden" id="txCardField"><span>Cartão</span><select id="txCard"></select></label>
+        <label class="field hidden" id="txInstallmentsField"><span>Parcelamento</span><select id="txInstallments"><option value="1">À vista</option><option value="2">2x</option><option value="3">3x</option><option value="4">4x</option><option value="5">5x</option><option value="6">6x</option><option value="7">7x</option><option value="8">8x</option><option value="9">9x</option><option value="10">10x</option><option value="11">11x</option><option value="12">12x</option><option value="18">18x</option><option value="24">24x</option></select></label>
         <label class="field"><span>Status</span><select id="txStatus"><option value="paid">Pago / Recebido</option><option value="pending">Pendente</option></select></label>
         <label class="field"><span>Vencimento</span><input id="txDueDate" type="date" /></label>
+        <div id="txCreditHint" class="form-hint full hidden">Compras no crédito entram na fatura do cartão. Em compras parceladas, o valor informado é o total da compra.</div>
         <label class="field full"><span>Observação</span><textarea id="txNotes" rows="2" maxlength="180" placeholder="Opcional"></textarea></label>
       </div>
       <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal">Cancelar</button><button type="submit" class="btn btn-primary">Salvar lançamento</button></div>
@@ -225,15 +254,38 @@
       <div class="modal-head"><div><p class="eyebrow">AUTOMAÇÃO</p><h2 id="recurringModalTitle">Nova recorrência</h2></div><button type="button" class="icon-btn close-recurring">×</button></div>
       <input id="recurringId" type="hidden" />
       <div class="form-grid">
+        <label class="field"><span>Natureza</span><select id="recKind"><option value="fixed">Conta fixa</option><option value="subscription">Assinatura</option><option value="internet">Chip / internet / telefone</option><option value="income">Receita recorrente</option><option value="other">Outro recorrente</option></select></label>
         <label class="field"><span>Tipo</span><select id="recType"><option value="expense">Despesa</option><option value="income">Receita</option></select></label>
         <label class="field"><span>Dia do mês</span><input id="recDay" type="number" min="1" max="31" required /></label>
-        <label class="field full"><span>Descrição</span><input id="recDescription" required maxlength="80" /></label>
+        <label class="field"><span>Valor mensal</span><input id="recAmount" inputmode="decimal" required /></label>
+        <label class="field full"><span>Descrição</span><input id="recDescription" required maxlength="80" placeholder="Ex.: Netflix, Vivo chip, internet, aluguel" /></label>
+        <label class="field"><span>Empresa / fornecedor</span><input id="recProvider" maxlength="60" placeholder="Opcional" /></label>
         <label class="field"><span>Categoria</span><select id="recCategory" required></select></label>
-        <label class="field"><span>Valor</span><input id="recAmount" inputmode="decimal" required /></label>
         <label class="field"><span>Forma</span><select id="recPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field hidden" id="recCardField"><span>Cartão</span><select id="recCard"></select></label>
         <label class="field checkbox-field"><input id="recActive" type="checkbox" checked /><span>Recorrência ativa</span></label>
+        <label class="field checkbox-field"><input id="recAutoGenerate" type="checkbox" checked /><span>Gerar automaticamente todo mês</span></label>
       </div>
       <div class="modal-actions"><button type="button" class="btn btn-secondary close-recurring">Cancelar</button><button type="submit" class="btn btn-primary">Salvar recorrência</button></div>
+    </form>
+  </dialog>
+
+
+  <dialog id="cardModal" class="modal">
+    <form id="cardForm" method="dialog">
+      <div class="modal-head"><div><p class="eyebrow">CARTÃO</p><h2 id="cardModalTitle">Novo cartão</h2></div><button type="button" class="icon-btn close-card">×</button></div>
+      <input id="cardId" type="hidden" />
+      <div class="form-grid">
+        <label class="field full"><span>Nome do cartão</span><input id="cardName" required maxlength="50" placeholder="Ex.: Nubank, Inter, Itaú Platinum" /></label>
+        <label class="field"><span>Emissor / banco</span><input id="cardIssuer" maxlength="50" placeholder="Opcional" /></label>
+        <label class="field"><span>Final do cartão</span><input id="cardLast4" inputmode="numeric" maxlength="4" pattern="[0-9]{0,4}" placeholder="Somente 4 dígitos" /></label>
+        <label class="field"><span>Limite</span><input id="cardLimit" inputmode="decimal" required placeholder="0,00" /></label>
+        <label class="field"><span>Dia do fechamento</span><input id="cardClosingDay" type="number" min="1" max="31" required /></label>
+        <label class="field"><span>Dia do vencimento</span><input id="cardDueDay" type="number" min="1" max="31" required /></label>
+        <label class="field checkbox-field"><input id="cardActive" type="checkbox" checked /><span>Cartão ativo</span></label>
+      </div>
+      <div class="form-hint">Não armazene número completo, CVV ou senha. O campo “final” aceita apenas os últimos 4 dígitos para identificação.</div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary close-card">Cancelar</button><button type="submit" class="btn btn-primary">Salvar cartão</button></div>
     </form>
   </dialog>
 
