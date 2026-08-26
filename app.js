@@ -25,6 +25,7 @@
   let cloudSyncing = false;
   let lastCloudUpdatedAt = null;
   let cloudPollTimer = null;
+  let localRevision = 0;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -98,7 +99,12 @@
     } catch { return clone(DEFAULT_STATE); }
   }
   function saveLocalState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-  function saveState() { saveLocalState(); cloudDirty = true; scheduleCloudPush(); }
+  function saveState() {
+    localRevision += 1;
+    saveLocalState();
+    cloudDirty = true;
+    scheduleCloudPush();
+  }
 
   function currentMonth() {
     const d = new Date();
@@ -851,25 +857,60 @@
 
   async function pushCloudState() {
     if (!cloudClient || !cloudUser || !cloudDirty || !navigator.onLine || cloudSyncing) return;
+
+    // Envia um snapshot consistente. Se o usuário alterar algo enquanto o envio
+    // estiver em andamento, a alteração mais recente continua marcada como pendente.
+    const revisionAtStart = localRevision;
+    const stateSnapshot = clone(state);
     cloudSyncing = true;
     setCloudStatus('Sincronizando...', 'syncing');
+
     try {
-      const { data, error } = await cloudClient.from('finance_states').upsert({ user_id: cloudUser.id, state }, { onConflict: 'user_id' }).select('updated_at').single();
+      const { data, error } = await cloudClient
+        .from('finance_states')
+        .upsert({ user_id: cloudUser.id, state: stateSnapshot }, { onConflict: 'user_id' })
+        .select('updated_at')
+        .single();
       if (error) throw error;
+
       lastCloudUpdatedAt = data.updated_at;
-      cloudDirty = false;
-      setCloudStatus('Sincronizado', 'ok');
+      if (localRevision === revisionAtStart) {
+        cloudDirty = false;
+        setCloudStatus('Sincronizado', 'ok');
+      } else {
+        // Houve uma nova edição durante o request; não a considere sincronizada.
+        cloudDirty = true;
+        setCloudStatus('Sincronizando alterações recentes...', 'syncing');
+      }
     } catch (err) {
       console.error('Erro ao enviar para nuvem:', err);
       setCloudStatus('Pendente de sincronização', navigator.onLine ? 'error' : 'offline');
-    } finally { cloudSyncing = false; }
+    } finally {
+      cloudSyncing = false;
+      if (cloudDirty && localRevision !== revisionAtStart) scheduleCloudPush();
+    }
   }
 
   async function pullCloudState() {
     if (!cloudClient || !cloudUser || cloudDirty || !navigator.onLine || cloudSyncing) return;
+
+    // Guarda a revisão local antes da consulta. Uma edição feita enquanto o request
+    // estiver no ar nunca pode ser sobrescrita por uma resposta antiga da nuvem.
+    const revisionAtStart = localRevision;
     try {
-      const { data, error } = await cloudClient.from('finance_states').select('state,updated_at').eq('user_id', cloudUser.id).maybeSingle();
+      const { data, error } = await cloudClient
+        .from('finance_states')
+        .select('state,updated_at')
+        .eq('user_id', cloudUser.id)
+        .maybeSingle();
       if (error) throw error;
+
+      if (cloudDirty || localRevision !== revisionAtStart) {
+        setCloudStatus('Sincronizando alterações locais...', 'syncing');
+        scheduleCloudPush();
+        return;
+      }
+
       if (!data || data.updated_at === lastCloudUpdatedAt) return;
       state = normalizeCloudState(data.state);
       saveLocalState();
@@ -877,7 +918,9 @@
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
       setCloudStatus('Atualizado da nuvem', 'ok');
-    } catch (err) { console.warn('Falha ao buscar alterações:', err.message || err); }
+    } catch (err) {
+      console.warn('Falha ao buscar alterações:', err.message || err);
+    }
   }
 
   async function syncNow() {
