@@ -2,6 +2,7 @@
   'use strict';
 
   const STORAGE_KEY = 'meuFinanceiroStateV1';
+  const DIRTY_KEY = 'meuFinanceiroCloudDirtyV1';
   const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
   const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -13,14 +14,15 @@
     transactions: [],
     recurring: [],
     cards: [],
-    cardPayments: []
+    cardPayments: [],
+    syncMeta: { tombstones: { accounts: [], transactions: [], recurring: [], cards: [], cardPayments: [] } }
   };
 
   let state = loadState();
   let deferredInstallPrompt = null;
   let cloudClient = null;
   let cloudUser = null;
-  let cloudDirty = false;
+  let cloudDirty = localStorage.getItem(DIRTY_KEY) === '1';
   let cloudPushTimer = null;
   let cloudSyncing = false;
   let lastCloudUpdatedAt = null;
@@ -66,16 +68,29 @@
   }
 
   function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
+  const SYNC_COLLECTIONS = ['accounts','transactions','recurring','cards','cardPayments'];
+  function nowStamp() { return Date.now(); }
+  function normalizeTombstones(base) {
+    const src = base?.syncMeta?.tombstones || {};
+    const out = {};
+    SYNC_COLLECTIONS.forEach(kind => {
+      out[kind] = Array.isArray(src[kind])
+        ? src[kind].filter(x => x && x.id).map(x => ({ id: String(x.id), deletedAt: Number(x.deletedAt || 0) }))
+        : [];
+    });
+    return out;
+  }
   function normalizeState(candidate) {
     const base = (!candidate || candidate.version !== 1) ? clone(DEFAULT_STATE) : candidate;
-    const normalizedRecurring = Array.isArray(base.recurring) ? base.recurring.map(r => ({
+    const withMeta = item => ({ ...item, _updatedAt: Number(item?._updatedAt || 0) });
+    const normalizedRecurring = Array.isArray(base.recurring) ? base.recurring.map(r => withMeta({
       ...r,
       kind: r.kind || (r.type === 'income' ? 'income' : (r.category === 'Assinaturas' ? 'subscription' : 'fixed')),
       provider: r.provider || '',
       cardId: r.cardId || null,
       autoGenerate: r.autoGenerate !== false
     })) : [];
-    const normalizedTransactions = Array.isArray(base.transactions) ? base.transactions.map(t => ({
+    const normalizedTransactions = Array.isArray(base.transactions) ? base.transactions.map(t => withMeta({
       ...t,
       cardId: t.cardId || null,
       invoiceMonth: t.invoiceMonth || null,
@@ -84,15 +99,88 @@
       installmentNumber: Number(t.installmentNumber || 0),
       installmentTotal: Number(t.installmentTotal || 0)
     })) : [];
+    const normalizedPayments = Array.isArray(base.cardPayments) ? base.cardPayments.map(p => withMeta({
+      ...p,
+      id: p.id || `${p.cardId}:${p.month}`,
+      paid: Boolean(p.paid)
+    })) : [];
     return {
       version: 1,
       categories: Array.isArray(base.categories) && base.categories.length ? base.categories : clone(DEFAULT_STATE.categories),
-      accounts: Array.isArray(base.accounts) ? base.accounts : [],
+      accounts: Array.isArray(base.accounts) ? base.accounts.map(withMeta) : [],
       transactions: normalizedTransactions,
       recurring: normalizedRecurring,
-      cards: Array.isArray(base.cards) ? base.cards : [],
-      cardPayments: Array.isArray(base.cardPayments) ? base.cardPayments : []
+      cards: Array.isArray(base.cards) ? base.cards.map(withMeta) : [],
+      cardPayments: normalizedPayments,
+      syncMeta: { tombstones: normalizeTombstones(base) }
     };
+  }
+  function entityId(kind, item) {
+    if (!item) return '';
+    return String(item.id || (kind === 'cardPayments' ? `${item.cardId}:${item.month}` : ''));
+  }
+  function touchEntity(item) {
+    return { ...item, _updatedAt: nowStamp() };
+  }
+  function markDeleted(kind, id) {
+    if (!id || !SYNC_COLLECTIONS.includes(kind)) return;
+    const list = state.syncMeta?.tombstones?.[kind] || (state.syncMeta.tombstones[kind] = []);
+    const stamp = nowStamp();
+    const existing = list.find(x => x.id === String(id));
+    if (existing) existing.deletedAt = Math.max(existing.deletedAt || 0, stamp);
+    else list.push({ id: String(id), deletedAt: stamp });
+  }
+  function mergedTombstones(localList=[], remoteList=[]) {
+    const map = new Map();
+    [...remoteList, ...localList].forEach(x => {
+      if (!x?.id) return;
+      const id = String(x.id), ts = Number(x.deletedAt || 0);
+      if (!map.has(id) || ts > map.get(id).deletedAt) map.set(id, { id, deletedAt: ts });
+    });
+    // Keep tombstones for 180 days; this is enough to prevent stale devices from resurrecting deletions.
+    const cutoff = Date.now() - 180 * 24 * 60 * 60 * 1000;
+    return [...map.values()].filter(x => x.deletedAt >= cutoff || x.deletedAt === 0);
+  }
+  function mergeEntityCollection(kind, localArr, remoteArr, tombstones, prefer='remote') {
+    const localMap = new Map((localArr || []).map(x => [entityId(kind,x), x]).filter(([id]) => id));
+    const remoteMap = new Map((remoteArr || []).map(x => [entityId(kind,x), x]).filter(([id]) => id));
+    const tombMap = new Map((tombstones || []).map(x => [String(x.id), Number(x.deletedAt || 0)]));
+    const ids = new Set([...localMap.keys(), ...remoteMap.keys()]);
+    const out = [];
+    ids.forEach(id => {
+      const l = localMap.get(id), r = remoteMap.get(id);
+      let chosen;
+      if (!l) chosen = r;
+      else if (!r) chosen = l;
+      else {
+        const lt = Number(l._updatedAt || 0), rt = Number(r._updatedAt || 0);
+        if (lt > rt) chosen = l;
+        else if (rt > lt) chosen = r;
+        else chosen = prefer === 'local' ? l : r;
+      }
+      if (!chosen) return;
+      const deletedAt = tombMap.get(id) || 0;
+      if (deletedAt >= Number(chosen._updatedAt || 0) && deletedAt > 0) return;
+      out.push(chosen);
+    });
+    return out;
+  }
+  function mergeStates(localCandidate, remoteCandidate, prefer='remote') {
+    const local = normalizeState(localCandidate);
+    const remote = normalizeState(remoteCandidate);
+    const tombstones = {};
+    SYNC_COLLECTIONS.forEach(kind => {
+      tombstones[kind] = mergedTombstones(local.syncMeta.tombstones[kind], remote.syncMeta.tombstones[kind]);
+    });
+    const merged = {
+      version: 1,
+      categories: [...new Set([...(remote.categories || []), ...(local.categories || [])])].sort((a,b)=>a.localeCompare(b,'pt-BR')),
+      syncMeta: { tombstones }
+    };
+    SYNC_COLLECTIONS.forEach(kind => {
+      merged[kind] = mergeEntityCollection(kind, local[kind], remote[kind], tombstones[kind], prefer);
+    });
+    return normalizeState(merged);
   }
   function loadState() {
     try {
@@ -102,16 +190,25 @@
     } catch { return clone(DEFAULT_STATE); }
   }
   function saveLocalState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function setCloudDirty(value) {
+    cloudDirty = Boolean(value);
+    if (cloudDirty) localStorage.setItem(DIRTY_KEY, '1');
+    else localStorage.removeItem(DIRTY_KEY);
+  }
   function saveState() {
     localRevision += 1;
     saveLocalState();
-    cloudDirty = true;
+    setCloudDirty(true);
     scheduleCloudPush();
   }
 
   function currentMonth() {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+  function todayDateStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
   function monthOf(dateStr) { return (dateStr || '').slice(0,7); }
   function parseAmount(value) {
@@ -166,6 +263,28 @@
   }
   function invoicePaid(cardId, month) {
     return state.cardPayments.some(p => p.cardId === cardId && p.month === month && p.paid);
+  }
+  function effectiveTransactionStatus(t) {
+    if (t?.type === 'expense' && t.cardId) {
+      const inv = t.invoiceMonth || monthOf(t.date);
+      return invoicePaid(t.cardId, inv) ? 'paid' : 'pending';
+    }
+    return t?.status || 'pending';
+  }
+  function cardUsedLimit(cardId) {
+    const today = todayDateStr();
+    return sum(state.transactions
+      .filter(t => t.type === 'expense' && t.cardId === cardId)
+      // Parcelas futuras comprometem o limite desde a data da compra; cobranças
+      // recorrentes futuras só passam a comprometer quando a data chegar.
+      .filter(t => (t.purchaseDate || t.date || today) <= today)
+      .filter(t => !invoicePaid(cardId, t.invoiceMonth || monthOf(t.date)))
+      .map(t => t.amount));
+  }
+  function cardAvailableLimit(cardId) {
+    const card = cardById(cardId);
+    if (!card) return 0;
+    return Math.max(0, Number(card.limit || 0) - cardUsedLimit(cardId));
   }
   function splitAmount(total, count) {
     const cents = Math.round(Number(total) * 100);
@@ -248,10 +367,10 @@
   function dashboardTransactions() { return state.transactions.filter(t => monthOf(t.date) === selectedMonth()); }
   function renderDashboard() {
     const tx = dashboardTransactions();
-    const paid = tx.filter(t => t.status === 'paid');
+    const paid = tx.filter(t => effectiveTransactionStatus(t) === 'paid');
     const income = paid.filter(t => t.type === 'income');
     const expense = paid.filter(t => t.type === 'expense');
-    const pending = tx.filter(t => t.status === 'pending');
+    const pending = tx.filter(t => effectiveTransactionStatus(t) === 'pending');
     const incomeTotal = sum(income.map(t=>t.amount));
     const expenseTotal = sum(expense.map(t=>t.amount));
     const pendingTotal = sum(pending.map(t=>t.amount));
@@ -281,7 +400,7 @@
     els.recentTransactions.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
       const paymentLabel=`${t.payment || 'Outro'}${card?` • ${card.name}`:''}`;
-      return `<div class="transaction-row"><div class="tx-icon ${t.type}">${t.type === 'expense' ? '−' : '+'}</div><div class="tx-main"><strong>${escapeHtml(t.description)}</strong><span>${formatDate(t.date)} • ${escapeHtml(t.category)} • ${t.status === 'paid' ? 'Pago/Recebido' : 'Pendente'}${t.invoiceMonth?` • fatura ${monthLabel(t.invoiceMonth)}`:''}</span></div><div class="tx-value"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong><span>${escapeHtml(paymentLabel)}</span></div></div>`;
+      return `<div class="transaction-row"><div class="tx-icon ${t.type}">${t.type === 'expense' ? '−' : '+'}</div><div class="tx-main"><strong>${escapeHtml(t.description)}</strong><span>${formatDate(t.date)} • ${escapeHtml(t.category)} • ${effectiveTransactionStatus(t) === 'paid' ? 'Pago/Recebido' : 'Pendente'}${t.invoiceMonth?` • fatura ${monthLabel(t.invoiceMonth)}`:''}</span></div><div class="tx-value"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong><span>${escapeHtml(paymentLabel)}</span></div></div>`;
     }).join('');
   }
 
@@ -317,7 +436,7 @@
     const q = els.transactionSearch.value.trim().toLowerCase();
     return state.transactions.filter(t => monthOf(t.date) === selectedMonth())
       .filter(t => !els.typeFilter.value || t.type === els.typeFilter.value)
-      .filter(t => !els.statusFilter.value || t.status === els.statusFilter.value)
+      .filter(t => !els.statusFilter.value || effectiveTransactionStatus(t) === els.statusFilter.value)
       .filter(t => !q || `${t.description} ${t.category} ${t.payment} ${cardById(t.cardId)?.name||''}`.toLowerCase().includes(q))
       .sort((a,b)=>b.date.localeCompare(a.date));
   }
@@ -327,7 +446,7 @@
     els.transactionsTable.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
       const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.invoiceMonth?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(t.invoiceMonth))}</div>`:''}`;
-      return `<tr><td>${formatDate(t.date)}</td><td><strong>${escapeHtml(t.description)}</strong>${t.purchaseDate&&t.purchaseDate!==t.date?`<div class="installment-note">Compra em ${formatDate(t.purchaseDate)}</div>`:''}</td><td>${escapeHtml(t.category)}</td><td>${payment}</td><td><span class="status ${t.status}">${t.status === 'paid' ? 'Pago / Recebido' : 'Pendente'}</span></td><td class="right"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong></td><td><div class="row-actions"><button class="mini-btn" data-action="toggle-paid" data-id="${t.id}" title="Alterar status">✓</button><button class="mini-btn" data-action="edit-tx" data-id="${t.id}" title="Editar">✎</button><button class="mini-btn" data-action="delete-tx" data-id="${t.id}" title="Excluir">×</button></div></td></tr>`;
+      return `<tr><td>${formatDate(t.date)}</td><td><strong>${escapeHtml(t.description)}</strong>${t.purchaseDate&&t.purchaseDate!==t.date?`<div class="installment-note">Compra em ${formatDate(t.purchaseDate)}</div>`:''}</td><td>${escapeHtml(t.category)}</td><td>${payment}</td><td><span class="status ${effectiveTransactionStatus(t)}">${effectiveTransactionStatus(t) === 'paid' ? 'Pago / Recebido' : 'Pendente'}</span></td><td class="right"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong></td><td><div class="row-actions"><button class="mini-btn" data-action="toggle-paid" data-id="${t.id}" title="Alterar status">✓</button><button class="mini-btn" data-action="edit-tx" data-id="${t.id}" title="Editar">✎</button><button class="mini-btn" data-action="delete-tx" data-id="${t.id}" title="Excluir">×</button></div></td></tr>`;
     }).join('');
     $$('[data-action="edit-tx"]').forEach(b=>b.addEventListener('click',()=>openTransaction(b.dataset.id)));
     $$('[data-action="delete-tx"]').forEach(b=>b.addEventListener('click',()=>deleteTransaction(b.dataset.id)));
@@ -408,7 +527,7 @@
     const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:$('#txStatus').value,payment,dueDate:$('#txDueDate').value,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
 
     if (existing) {
-      const updated={...existing,...base,cardId};
+      const updated=touchEntity({...existing,...base,cardId});
       if (payment==='Crédito' && type==='expense') {
         updated.purchaseDate=existing.purchaseDate || date;
         updated.invoiceMonth=existing.installmentTotal>1 ? existing.invoiceMonth : invoiceMonthFor(card,date);
@@ -418,7 +537,8 @@
       }
       const idx=state.transactions.findIndex(t=>t.id===existing.id);
       state.transactions[idx]=updated;
-      saveState(); closeDialog(els.transactionModal); renderAll(); toast('Lançamento atualizado.');
+      saveState(); closeDialog(els.transactionModal); renderAll();
+      toast(updated.cardId ? `Lançamento atualizado • ${card.name} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento atualizado.');
       return;
     }
 
@@ -430,7 +550,7 @@
       pieces.forEach((piece,i)=>{
         const installmentDate=addMonthsToDate(date,i);
         const invoiceMonth=shiftMonth(firstInvoice,i);
-        state.transactions.push({
+        state.transactions.push(touchEntity({
           id:uid(),
           ...base,
           date:installmentDate,
@@ -444,13 +564,13 @@
           installmentGroupId:groupId,
           installmentNumber:i+1,
           installmentTotal:installments
-        });
+        }));
       });
-      saveState(); closeDialog(els.transactionModal); renderAll(); toast(`Compra parcelada em ${installments}x registrada.`);
+      saveState(); closeDialog(els.transactionModal); renderAll(); toast(`Compra em ${installments}x vinculada ao ${card.name} • limite livre ${money.format(cardAvailableLimit(card.id))}`);
       return;
     }
 
-    const tx={id:uid(),...base,cardId:null,invoiceMonth:null,purchaseDate:null,installmentGroupId:null,installmentNumber:0,installmentTotal:0};
+    const tx=touchEntity({id:uid(),...base,cardId:null,invoiceMonth:null,purchaseDate:null,installmentGroupId:null,installmentNumber:0,installmentTotal:0});
     if (payment==='Crédito' && type==='expense') {
       tx.cardId=cardId;
       tx.purchaseDate=date;
@@ -459,10 +579,11 @@
       tx.status='pending';
     }
     state.transactions.push(tx);
-    saveState(); closeDialog(els.transactionModal); renderAll(); toast('Lançamento salvo.');
+    saveState(); closeDialog(els.transactionModal); renderAll();
+    toast(tx.cardId ? `Compra vinculada ao ${card.name} • fatura ${monthLabel(tx.invoiceMonth)} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento salvo.');
   }
-  function deleteTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm(`Excluir “${t.description}”?`))return;state.transactions=state.transactions.filter(x=>x.id!==id);saveState();renderAll();toast('Lançamento excluído.');}
-  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;t.status=t.status==='paid'?'pending':'paid';saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
+  function deleteTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm(`Excluir “${t.description}”?`))return;state.transactions=state.transactions.filter(x=>x.id!==id);markDeleted('transactions',id);saveState();renderAll();toast('Lançamento excluído.');}
+  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&t.cardId){toast('Compras no crédito são quitadas pela fatura do cartão.');return;}t.status=t.status==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
 
   function recurringKindLabel(kind) {
     return ({fixed:'Conta fixa',subscription:'Assinatura',internet:'Chip / internet',income:'Receita recorrente',other:'Recorrente'})[kind] || 'Recorrente';
@@ -535,7 +656,7 @@
     const cardId=payment==='Crédito'?($('#recCard').value||null):null;
     if(payment==='Crédito' && !cardById(cardId)){toast('Selecione um cartão válido para esta cobrança recorrente.');return;}
     const id=$('#recurringId').value||uid();
-    const r={
+    const r=touchEntity({
       id,
       kind:$('#recKind').value,
       type:$('#recType').value,
@@ -548,7 +669,7 @@
       cardId,
       active:$('#recActive').checked,
       autoGenerate:$('#recAutoGenerate').checked
-    };
+    });
     const idx=state.recurring.findIndex(x=>x.id===id);
     if(idx>=0)state.recurring[idx]=r;else state.recurring.push(r);
 
@@ -560,7 +681,7 @@
     closeDialog(els.recurringModal);renderAll();
     toast(idx>=0?'Fixo/assinatura atualizado.':'Fixo/assinatura cadastrado.');
   }
-  function deleteRecurring(id){const r=state.recurring.find(x=>x.id===id);if(!r||!confirm(`Excluir “${r.description}”? Os lançamentos já gerados serão mantidos.`))return;state.recurring=state.recurring.filter(x=>x.id!==id);saveState();renderAll();toast('Recorrência excluída.');}
+  function deleteRecurring(id){const r=state.recurring.find(x=>x.id===id);if(!r||!confirm(`Excluir “${r.description}”? Os lançamentos já gerados serão mantidos.`))return;state.recurring=state.recurring.filter(x=>x.id!==id);markDeleted('recurring',id);saveState();renderAll();toast('Recorrência excluída.');}
   function ensureRecurringForMonth(month,silent=false,includeManual=false,persist=true){
     if(!month)return 0;
     const [year,mo]=month.split('-').map(Number);
@@ -576,12 +697,12 @@
         invoiceMonth=invoiceMonthFor(card,baseDate);
         dueDate=invoiceDueDate(card,invoiceMonth);
       }
-      state.transactions.push({
-        id:uid(),date:baseDate,type:r.type,category:r.category,description:r.description,amount:Number(r.amount),
+      state.transactions.push(touchEntity({
+        id:`rec-${r.id}-${month}`,date:baseDate,type:r.type,category:r.category,description:r.description,amount:Number(r.amount),
         status,payment:r.payment,dueDate,notes:r.provider?`Cobrança recorrente • ${r.provider}`:'Gerado a partir de recorrência',
         recurringId:r.id,cardId:card?.id||null,invoiceMonth,purchaseDate:card?baseDate:null,
         installmentGroupId:null,installmentNumber:0,installmentTotal:0
-      });
+      }));
       created++;
     });
     if(created){
@@ -603,9 +724,14 @@
     const total=sum(invoiceTotals.map(x=>x.total));
     const openTotal=sum(invoiceTotals.filter(x=>x.total>0 && !invoicePaid(x.card.id,month)).map(x=>x.total));
     const limitTotal=sum(activeCards.map(c=>c.limit));
+    const limitUsed=sum(activeCards.map(c=>cardUsedLimit(c.id)));
+    const limitAvailable=Math.max(0,limitTotal-limitUsed);
     $('#cardsInvoiceTotal').textContent=money.format(total);
     $('#cardsOpenTotal').textContent=money.format(openTotal);
-    $('#cardsLimitTotal').textContent=money.format(limitTotal);
+    const limitNode=$('#cardsLimitAvailable')||$('#cardsLimitTotal');
+    if(limitNode)limitNode.textContent=money.format(limitAvailable);
+    const usageNode=$('#cardsLimitUsage');
+    if(usageNode)usageNode.textContent=`${money.format(limitUsed)} usados de ${money.format(limitTotal)}`;
     $('#cardsInvoiceCount').textContent=`${invoiceTotals.filter(x=>x.total>0).length} ${invoiceTotals.filter(x=>x.total>0).length===1?'cartão com movimento':'cartões com movimento'}`;
     $('#invoicePanelTitle').textContent=`Faturas de ${monthLabel(month)}`;
     els.cardsEmpty.classList.toggle('hidden',state.cards.length>0);
@@ -614,7 +740,7 @@
       const invoice=invoiceTransactions(c.id,month);
       const invoiceTotal=sum(invoice.map(t=>t.amount));
       const paid=invoicePaid(c.id,month);
-      const committed=sum(state.transactions.filter(t=>t.cardId===c.id && t.type==='expense' && t.status==='pending').map(t=>t.amount));
+      const committed=cardUsedLimit(c.id);
       const limitAvailable=Math.max(0,Number(c.limit||0)-committed);
       return `<article class="card data-card card-visual">
         <div class="data-card-head">
@@ -623,7 +749,7 @@
         </div>
         <div class="card-meta"><span class="soft-chip">Fecha dia ${c.closingDay}</span><span class="soft-chip">Vence dia ${c.dueDay}</span>${c.active===false?'<span class="soft-chip">Inativo</span>':''}</div>
         <div class="data-card-value">${money.format(invoiceTotal)}</div>
-        <div class="data-card-foot"><span>Fatura do mês • ${paid?'paga':'em aberto'}</span><span>limite livre ${money.format(limitAvailable)}</span></div>
+        <div class="data-card-foot"><span>Fatura do mês • ${paid?'paga':'em aberto'}</span><span>usado ${money.format(committed)} • livre ${money.format(limitAvailable)}</span></div>
       </article>`;
     }).join('');
 
@@ -673,7 +799,7 @@
     if(!(limit>=0)||closingDay<1||closingDay>31||dueDay<1||dueDay>31){toast('Confira limite, fechamento e vencimento.');return;}
     if(last4 && !/^\d{4}$/.test(last4)){toast('O final do cartão deve ter exatamente 4 dígitos.');return;}
     const id=$('#cardId').value||uid();
-    const item={id,name:$('#cardName').value.trim(),issuer:$('#cardIssuer').value.trim(),last4,limit,closingDay,dueDay,active:$('#cardActive').checked};
+    const item=touchEntity({id,name:$('#cardName').value.trim(),issuer:$('#cardIssuer').value.trim(),last4,limit,closingDay,dueDay,active:$('#cardActive').checked});
     const idx=state.cards.findIndex(c=>c.id===id);
     if(idx>=0)state.cards[idx]=item;else state.cards.push(item);
     saveState();closeDialog(els.cardModal);renderAll();toast(idx>=0?'Cartão atualizado.':'Cartão cadastrado.');
@@ -685,33 +811,64 @@
     if(linkedTx||linkedRecurring){toast('Esse cartão possui compras ou cobranças vinculadas. Desative-o em vez de excluir.');return;}
     if(!confirm(`Excluir o cartão “${c.name}”?`))return;
     state.cards=state.cards.filter(x=>x.id!==id);
+    markDeleted('cards',id);
+    state.cardPayments.filter(p=>p.cardId===id).forEach(p=>markDeleted('cardPayments',entityId('cardPayments',p)));
     state.cardPayments=state.cardPayments.filter(p=>p.cardId!==id);
     saveState();renderAll();toast('Cartão excluído.');
   }
   function toggleInvoiceStatus(cardId,month){
     const txs=invoiceTransactions(cardId,month);
-    if(!txs.length)return;
+    if(!txs.length){toast('Essa fatura ainda não possui compras.');return;}
     const isPaid=invoicePaid(cardId,month);
-    const existing=state.cardPayments.find(p=>p.cardId===cardId&&p.month===month);
-    if(existing){existing.paid=!isPaid;existing.paidAt=!isPaid?new Date().toISOString():null;}
-    else state.cardPayments.push({cardId,month,paid:true,paidAt:new Date().toISOString()});
-    txs.forEach(t=>t.status=isPaid?'pending':'paid');
-    saveState();renderAll();toast(isPaid?'Fatura reaberta.':'Fatura marcada como paga.');
+    const id=`${cardId}:${month}`;
+    const existing=state.cardPayments.find(p=>entityId('cardPayments',p)===id);
+    const item=touchEntity({id,cardId,month,paid:!isPaid,paidAt:!isPaid?new Date().toISOString():null});
+    if(existing){const idx=state.cardPayments.indexOf(existing);state.cardPayments[idx]=item;}else state.cardPayments.push(item);
+    saveState();renderAll();toast(isPaid?'Fatura reaberta. Limite comprometido novamente.':'Fatura marcada como paga. Limite liberado.');
   }
+
 
   function renderAccounts(){const total=sum(state.accounts.map(a=>a.balance));els.accountsTotal.textContent=money.format(total);els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Atualize quando necessário</span><span>posição manual</span></div></article>`).join('');$$('[data-acc-edit]').forEach(b=>b.addEventListener('click',()=>openAccount(b.dataset.accEdit)));$$('[data-acc-delete]').forEach(b=>b.addEventListener('click',()=>deleteAccount(b.dataset.accDelete)));}
   function openAccount(id=null){$('#accountForm').reset();$('#accountId').value='';$('#accountModalTitle').textContent=id?'Editar recurso':'Novo recurso';if(id){const a=state.accounts.find(x=>x.id===id);if(!a)return;$('#accountId').value=a.id;$('#accountName').value=a.name;$('#accountBalance').value=formatInputAmount(a.balance);}showDialog(els.accountModal);}
-  function saveAccount(e){e.preventDefault();const balance=parseAmount($('#accountBalance').value);if(!Number.isFinite(balance)){toast('Informe um valor válido.');return;}const id=$('#accountId').value||uid();const item={id,name:$('#accountName').value.trim(),balance};const idx=state.accounts.findIndex(x=>x.id===id);if(idx>=0)state.accounts[idx]=item;else state.accounts.push(item);saveState();closeDialog(els.accountModal);renderAll();toast(idx>=0?'Recurso atualizado.':'Recurso adicionado.');}
-  function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a||!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);saveState();renderAll();toast('Recurso excluído.');}
+  function saveAccount(e){e.preventDefault();const balance=parseAmount($('#accountBalance').value);if(!Number.isFinite(balance)){toast('Informe um valor válido.');return;}const id=$('#accountId').value||uid();const item=touchEntity({id,name:$('#accountName').value.trim(),balance});const idx=state.accounts.findIndex(x=>x.id===id);if(idx>=0)state.accounts[idx]=item;else state.accounts.push(item);saveState();closeDialog(els.accountModal);renderAll();toast(idx>=0?'Recurso atualizado.':'Recurso adicionado.');}
+  function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a||!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);markDeleted('accounts',id);saveState();renderAll();toast('Recurso excluído.');}
 
   function renderSettings(){els.categoryTags.innerHTML=state.categories.map(c=>`<span class="tag">${escapeHtml(c)}<button data-cat-delete="${escapeHtml(c)}" title="Excluir">×</button></span>`).join('');$$('[data-cat-delete]').forEach(b=>b.addEventListener('click',()=>deleteCategory(b.dataset.catDelete)));}
   function addCategory(e){e.preventDefault();const input=$('#newCategory');const name=input.value.trim();if(!name)return;if(state.categories.some(c=>c.toLowerCase()===name.toLowerCase())){toast('Essa categoria já existe.');return;}state.categories.push(name);state.categories.sort((a,b)=>a.localeCompare(b,'pt-BR'));input.value='';saveState();renderAll();toast('Categoria adicionada.');}
   function deleteCategory(name){if(state.categories.length<=1){toast('Mantenha pelo menos uma categoria.');return;}if(!confirm(`Remover a categoria “${name}”? Lançamentos antigos continuarão com esse nome.`))return;state.categories=state.categories.filter(c=>c!==name);saveState();renderAll();toast('Categoria removida.');}
 
-  function exportCsv(){const list=filteredTransactions();const rows=[['Data','Tipo','Categoria','Descrição','Valor','Status','Forma de pagamento','Cartão','Fatura','Parcela','Vencimento','Observação'],...list.map(t=>[t.date,t.type==='expense'?'Despesa':'Receita',t.category,t.description,t.amount.toFixed(2).replace('.',','),t.status==='paid'?'Pago/Recebido':'Pendente',t.payment,cardById(t.cardId)?.name||'',t.invoiceMonth||'',t.installmentTotal>1?`${t.installmentNumber}/${t.installmentTotal}`:'',t.dueDate||'',t.notes||''])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`lancamentos-${selectedMonth()}.csv`);toast('CSV exportado.');}
+  function exportCsv(){const list=filteredTransactions();const rows=[['Data','Tipo','Categoria','Descrição','Valor','Status','Forma de pagamento','Cartão','Fatura','Parcela','Vencimento','Observação'],...list.map(t=>[t.date,t.type==='expense'?'Despesa':'Receita',t.category,t.description,t.amount.toFixed(2).replace('.',','),effectiveTransactionStatus(t)==='paid'?'Pago/Recebido':'Pendente',t.payment,cardById(t.cardId)?.name||'',t.invoiceMonth||'',t.installmentTotal>1?`${t.installmentNumber}/${t.installmentTotal}`:'',t.dueDate||'',t.notes||''])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`lancamentos-${selectedMonth()}.csv`);toast('CSV exportado.');}
   function downloadBackup(){const payload={app:'Meu Financeiro',exportedAt:new Date().toISOString(),state};downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`meu-financeiro-backup-${new Date().toISOString().slice(0,10)}.json`);toast('Backup baixado.');}
-  function restoreBackup(e){const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const parsed=JSON.parse(reader.result);const candidate=parsed.state||parsed;if(!candidate||candidate.version!==1||!Array.isArray(candidate.transactions)||!Array.isArray(candidate.accounts))throw new Error('Formato inválido');if(!confirm('Restaurar este backup substituirá os dados atuais. Continuar?'))return;state=normalizeState(candidate);saveState();ensureRecurringForMonth(currentMonth(),true);renderAll();toast('Backup restaurado.');}catch{alert('Não foi possível restaurar este arquivo de backup.');}finally{e.target.value='';}};reader.readAsText(file);}
-  function resetData(){if(!confirm('Isso apagará os dados atuais deste perfil e sincronizará o estado vazio com a nuvem. Deseja continuar?'))return;state=clone(DEFAULT_STATE);saveState();renderAll();toast('Sistema reiniciado.');}
+  function restoreBackup(e){
+    const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();
+    reader.onload=()=>{try{
+      const parsed=JSON.parse(reader.result);const candidate=parsed.state||parsed;
+      if(!candidate||candidate.version!==1||!Array.isArray(candidate.transactions)||!Array.isArray(candidate.accounts))throw new Error('Formato inválido');
+      if(!confirm('Restaurar este backup substituirá os dados atuais. Continuar?'))return;
+      const previous=state;
+      state=normalizeState(candidate);
+      const stamp=nowStamp();
+      SYNC_COLLECTIONS.forEach(kind=>{
+        const restoredIds=new Set(state[kind].map(x=>entityId(kind,x)));
+        previous[kind].forEach(x=>{const id=entityId(kind,x);if(id&&!restoredIds.has(id))markDeleted(kind,id);});
+        state[kind]=state[kind].map(x=>({...x,_updatedAt:stamp}));
+      });
+      saveState();ensureRecurringForMonth(currentMonth(),true);renderAll();toast('Backup restaurado.');
+    }catch{alert('Não foi possível restaurar este arquivo de backup.');}finally{e.target.value='';}};
+    reader.readAsText(file);
+  }
+
+  function resetData(){
+    if(!confirm('Isso apagará os dados atuais deste perfil e sincronizará o estado vazio com a nuvem. Deseja continuar?'))return;
+    const tombstones=normalizeTombstones(state);
+    const stamp=nowStamp();
+    SYNC_COLLECTIONS.forEach(kind=>state[kind].forEach(x=>{
+      const id=entityId(kind,x);if(!id)return;
+      const list=tombstones[kind];const existing=list.find(t=>t.id===id);
+      if(existing)existing.deletedAt=Math.max(existing.deletedAt||0,stamp);else list.push({id,deletedAt:stamp});
+    }));
+    state=clone(DEFAULT_STATE);state.syncMeta={tombstones};saveState();renderAll();toast('Sistema reiniciado.');
+  }
   function downloadBlob(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   function toast(message){els.toast.textContent=message;els.toast.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>els.toast.classList.add('hidden'),2600);}
 
@@ -860,7 +1017,7 @@
           .single();
         if (insertError) throw insertError;
         lastCloudUpdatedAt = inserted.updated_at;
-        if (localRevision === revisionAtStart) cloudDirty = false;
+        if (localRevision === revisionAtStart) setCloudDirty(false);
         return;
       }
 
@@ -868,14 +1025,14 @@
       // algo enquanto a consulta estava em andamento, nunca sobrescreva o local.
       if (dirtyAtStart || cloudDirty || localRevision !== revisionAtStart) {
         lastCloudUpdatedAt = data.updated_at;
-        cloudDirty = true;
+        setCloudDirty(true);
         return;
       }
 
       state = normalizeCloudState(data.state);
       saveLocalState();
       lastCloudUpdatedAt = data.updated_at;
-      cloudDirty = false;
+      setCloudDirty(false);
       renderAll();
     } finally {
       cloudSyncing = false;
@@ -896,38 +1053,80 @@
   async function pushCloudState() {
     if (!cloudClient || !cloudUser || !cloudDirty || !navigator.onLine || cloudSyncing) return;
 
-    // Envia um snapshot consistente. Se o usuário alterar algo enquanto o envio
-    // estiver em andamento, a alteração mais recente continua marcada como pendente.
     const revisionAtStart = localRevision;
-    const stateSnapshot = clone(state);
+    const localSnapshot = clone(state);
     cloudSyncing = true;
     setCloudStatus('Sincronizando...', 'syncing');
 
     try {
-      const { data, error } = await cloudClient
-        .from('finance_states')
-        .upsert({ user_id: cloudUser.id, state: stateSnapshot }, { onConflict: 'user_id' })
-        .select('updated_at')
-        .single();
-      if (error) throw error;
+      let syncedState = null;
+      let syncedUpdatedAt = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data: remote, error: readError } = await cloudClient
+          .from('finance_states')
+          .select('state,updated_at')
+          .eq('user_id', cloudUser.id)
+          .maybeSingle();
+        if (readError) throw readError;
 
-      lastCloudUpdatedAt = data.updated_at;
+        const merged = remote ? mergeStates(localSnapshot, remote.state, 'local') : normalizeState(localSnapshot);
+
+        if (!remote) {
+          const { data: inserted, error: insertError } = await cloudClient
+            .from('finance_states')
+            .insert({ user_id: cloudUser.id, state: merged })
+            .select('state,updated_at')
+            .single();
+          if (insertError) {
+            // Another device may have created the row simultaneously. Retry as an update.
+            if (insertError.code === '23505') continue;
+            throw insertError;
+          }
+          syncedState = normalizeState(inserted.state || merged);
+          syncedUpdatedAt = inserted.updated_at;
+          break;
+        }
+
+        // Optimistic lock: update only if nobody changed the cloud row since our read.
+        const { data: updated, error: updateError } = await cloudClient
+          .from('finance_states')
+          .update({ state: merged })
+          .eq('user_id', cloudUser.id)
+          .eq('updated_at', remote.updated_at)
+          .select('state,updated_at')
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (!updated) continue; // Conflict: fetch, merge and retry.
+        syncedState = normalizeState(updated.state || merged);
+        syncedUpdatedAt = updated.updated_at;
+        break;
+      }
+      if (!syncedState) throw new Error('Conflito de sincronização. Tente novamente.');
+
+      lastCloudUpdatedAt = syncedUpdatedAt;
       if (localRevision === revisionAtStart) {
-        cloudDirty = false;
+        state = syncedState;
+        saveLocalState();
+        setCloudDirty(false);
+        renderAll();
         setCloudStatus('Sincronizado', 'ok');
       } else {
-        // Houve uma nova edição durante o request; não a considere sincronizada.
-        cloudDirty = true;
+        // Merge the server confirmation into the newer local state without losing edits made during the request.
+        state = mergeStates(state, syncedState, 'local');
+        saveLocalState();
+        setCloudDirty(true);
         setCloudStatus('Sincronizando alterações recentes...', 'syncing');
       }
     } catch (err) {
       console.error('Erro ao enviar para nuvem:', err);
+      setCloudDirty(true);
       setCloudStatus('Pendente de sincronização', navigator.onLine ? 'error' : 'offline');
     } finally {
       cloudSyncing = false;
-      if (cloudDirty && localRevision !== revisionAtStart) scheduleCloudPush();
+      if (cloudDirty) scheduleCloudPush();
     }
   }
+
 
   async function pullCloudState() {
     if (!cloudClient || !cloudUser || cloudDirty || !navigator.onLine || cloudSyncing) return;
@@ -948,9 +1147,10 @@
       }
 
       if (!data || data.updated_at === lastCloudUpdatedAt) return;
-      state = normalizeCloudState(data.state);
+      state = mergeStates(state, data.state, 'remote');
       saveLocalState();
       lastCloudUpdatedAt = data.updated_at;
+      setCloudDirty(false);
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
       if (!cloudDirty) setCloudStatus('Atualizado da nuvem', 'ok');
@@ -961,6 +1161,7 @@
       if (cloudDirty || localRevision !== revisionAtStart) scheduleCloudPush();
     }
   }
+
 
   async function syncNow() {
     if (!cloudClient || !cloudUser) { toast('Entre na sua conta para sincronizar.'); return; }
