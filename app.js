@@ -26,6 +26,8 @@
   let cloudPushTimer = null;
   let cloudSyncing = false;
   let lastCloudUpdatedAt = null;
+  let cloudRevision = null;
+  let lastSyncError = '';
   let cloudPollTimer = null;
   let localRevision = 0;
 
@@ -979,6 +981,8 @@
   function handleLoggedOut() {
     cloudUser = null;
     lastCloudUpdatedAt = null;
+    cloudRevision = null;
+    lastSyncError = '';
     clearInterval(cloudPollTimer); cloudPollTimer = null;
     els.cloudUser.classList.add('hidden');
     els.cloudAccountText.textContent = 'Conecte sua conta para usar os mesmos dados no iPhone e no computador.';
@@ -1004,7 +1008,7 @@
     try {
       const { data, error } = await cloudClient
         .from('finance_states')
-        .select('state,updated_at')
+        .select('state,updated_at,revision')
         .eq('user_id', cloudUser.id)
         .maybeSingle();
       if (error) throw error;
@@ -1013,26 +1017,30 @@
         const { data: inserted, error: insertError } = await cloudClient
           .from('finance_states')
           .insert({ user_id: cloudUser.id, state: stateSnapshot })
-          .select('updated_at')
+          .select('state,updated_at,revision')
           .single();
         if (insertError) throw insertError;
         lastCloudUpdatedAt = inserted.updated_at;
+        cloudRevision = Number(inserted.revision || 0);
         if (localRevision === revisionAtStart) setCloudDirty(false);
+        lastSyncError = '';
         return;
       }
+
+      lastCloudUpdatedAt = data.updated_at;
+      cloudRevision = Number(data.revision || 0);
 
       // Se havia alteração local pendente antes da carga, ou o usuário alterou
       // algo enquanto a consulta estava em andamento, nunca sobrescreva o local.
       if (dirtyAtStart || cloudDirty || localRevision !== revisionAtStart) {
-        lastCloudUpdatedAt = data.updated_at;
         setCloudDirty(true);
         return;
       }
 
       state = normalizeCloudState(data.state);
       saveLocalState();
-      lastCloudUpdatedAt = data.updated_at;
       setCloudDirty(false);
+      lastSyncError = '';
       renderAll();
     } finally {
       cloudSyncing = false;
@@ -1044,66 +1052,91 @@
     return normalizeState(candidate);
   }
 
-  function scheduleCloudPush() {
+  function stateSignature(candidate) {
+    try { return JSON.stringify(normalizeState(candidate)); }
+    catch { return ''; }
+  }
+
+  function scheduleCloudPush(delay = 500) {
     if (!cloudClient || !cloudUser) return;
     clearTimeout(cloudPushTimer);
-    cloudPushTimer = setTimeout(() => pushCloudState(), 450);
+    cloudPushTimer = setTimeout(() => pushCloudState(), delay);
+  }
+
+  async function readCloudEnvelope() {
+    const { data, error } = await cloudClient
+      .from('finance_states')
+      .select('state,updated_at,revision')
+      .eq('user_id', cloudUser.id)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
   }
 
   async function pushCloudState() {
     if (!cloudClient || !cloudUser || !cloudDirty || !navigator.onLine || cloudSyncing) return;
 
     const revisionAtStart = localRevision;
-    const localSnapshot = clone(state);
+    let workingState = clone(state);
     cloudSyncing = true;
     setCloudStatus('Sincronizando...', 'syncing');
 
     try {
-      let syncedState = null;
-      let syncedUpdatedAt = null;
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const { data: remote, error: readError } = await cloudClient
+      // A revisão numérica evita usar timestamp como trava de concorrência.
+      // O RPC faz a comparação e o update dentro de uma transação no Postgres.
+      let remote = await readCloudEnvelope();
+      if (!remote) {
+        const { data: inserted, error: insertError } = await cloudClient
           .from('finance_states')
-          .select('state,updated_at')
-          .eq('user_id', cloudUser.id)
-          .maybeSingle();
-        if (readError) throw readError;
+          .insert({ user_id: cloudUser.id, state: workingState })
+          .select('state,updated_at,revision')
+          .single();
+        if (insertError && insertError.code !== '23505') throw insertError;
+        remote = insertError ? await readCloudEnvelope() : inserted;
+      }
+      if (!remote) throw new Error('Não foi possível localizar o estado financeiro na nuvem.');
 
-        const merged = remote ? mergeStates(localSnapshot, remote.state, 'local') : normalizeState(localSnapshot);
+      let syncedState = null;
+      let syncedUpdatedAt = remote.updated_at;
+      let expectedRevision = Number(remote.revision || 0);
 
-        if (!remote) {
-          const { data: inserted, error: insertError } = await cloudClient
-            .from('finance_states')
-            .insert({ user_id: cloudUser.id, state: merged })
-            .select('state,updated_at')
-            .single();
-          if (insertError) {
-            // Another device may have created the row simultaneously. Retry as an update.
-            if (insertError.code === '23505') continue;
-            throw insertError;
-          }
-          syncedState = normalizeState(inserted.state || merged);
-          syncedUpdatedAt = inserted.updated_at;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        workingState = mergeStates(workingState, remote.state, 'local');
+
+        const { data: result, error: rpcError } = await cloudClient
+          .rpc('mf_sync_finance_state', {
+            p_state: workingState,
+            p_expected_revision: expectedRevision
+          })
+          .single();
+        if (rpcError) throw rpcError;
+        if (!result) throw new Error('O servidor não retornou confirmação da sincronização.');
+
+        const returnedState = normalizeState(result.state || workingState);
+        const returnedRevision = Number(result.revision || expectedRevision);
+        syncedUpdatedAt = result.updated_at || syncedUpdatedAt;
+
+        if (result.applied) {
+          syncedState = returnedState;
+          cloudRevision = returnedRevision;
           break;
         }
 
-        // Optimistic lock: update only if nobody changed the cloud row since our read.
-        const { data: updated, error: updateError } = await cloudClient
-          .from('finance_states')
-          .update({ state: merged })
-          .eq('user_id', cloudUser.id)
-          .eq('updated_at', remote.updated_at)
-          .select('state,updated_at')
-          .maybeSingle();
-        if (updateError) throw updateError;
-        if (!updated) continue; // Conflict: fetch, merge and retry.
-        syncedState = normalizeState(updated.state || merged);
-        syncedUpdatedAt = updated.updated_at;
-        break;
+        // Outro dispositivo gravou primeiro. Use o estado devolvido pelo servidor,
+        // faça o merge e tente novamente com a nova revisão, sem perder o local.
+        remote = {
+          state: returnedState,
+          updated_at: result.updated_at,
+          revision: returnedRevision
+        };
+        expectedRevision = returnedRevision;
       }
-      if (!syncedState) throw new Error('Conflito de sincronização. Tente novamente.');
+
+      if (!syncedState) throw new Error('Houve muitas alterações simultâneas. Tente sincronizar novamente.');
 
       lastCloudUpdatedAt = syncedUpdatedAt;
+      lastSyncError = '';
+
       if (localRevision === revisionAtStart) {
         state = syncedState;
         saveLocalState();
@@ -1111,7 +1144,7 @@
         renderAll();
         setCloudStatus('Sincronizado', 'ok');
       } else {
-        // Merge the server confirmation into the newer local state without losing edits made during the request.
+        // Houve edição enquanto o request estava em andamento. Preserve e envie em seguida.
         state = mergeStates(state, syncedState, 'local');
         saveLocalState();
         setCloudDirty(true);
@@ -1119,14 +1152,19 @@
       }
     } catch (err) {
       console.error('Erro ao enviar para nuvem:', err);
+      lastSyncError = String(err?.message || err || 'Erro desconhecido');
       setCloudDirty(true);
-      setCloudStatus('Pendente de sincronização', navigator.onLine ? 'error' : 'offline');
+      if (/mf_sync_finance_state|revision/i.test(lastSyncError)) {
+        setCloudStatus('Atualização do banco necessária', 'error');
+      } else {
+        setCloudStatus('Pendente de sincronização', navigator.onLine ? 'error' : 'offline');
+      }
     } finally {
       cloudSyncing = false;
-      if (cloudDirty) scheduleCloudPush();
+      // Retry com pequena espera, inclusive após falha. O polling também continua ativo.
+      if (cloudDirty && navigator.onLine) scheduleCloudPush(lastSyncError ? 5000 : 650);
     }
   }
-
 
   async function pullCloudState() {
     if (!cloudClient || !cloudUser || cloudDirty || !navigator.onLine || cloudSyncing) return;
@@ -1134,34 +1172,49 @@
     const revisionAtStart = localRevision;
     cloudSyncing = true;
     try {
-      const { data, error } = await cloudClient
-        .from('finance_states')
-        .select('state,updated_at')
-        .eq('user_id', cloudUser.id)
-        .maybeSingle();
-      if (error) throw error;
+      const data = await readCloudEnvelope();
 
       if (cloudDirty || localRevision !== revisionAtStart) {
         setCloudStatus('Sincronizando alterações locais...', 'syncing');
         return;
       }
 
-      if (!data || data.updated_at === lastCloudUpdatedAt) return;
-      state = mergeStates(state, data.state, 'remote');
+      if (!data) return;
+      const remoteRevision = Number(data.revision || 0);
+      if (cloudRevision !== null && remoteRevision === cloudRevision) return;
+
+      const remoteState = normalizeState(data.state);
+      const merged = mergeStates(state, remoteState, 'remote');
+      const remoteSig = stateSignature(remoteState);
+      const mergedSig = stateSignature(merged);
+
+      state = merged;
       saveLocalState();
       lastCloudUpdatedAt = data.updated_at;
-      setCloudDirty(false);
+      cloudRevision = remoteRevision;
+      lastSyncError = '';
+
+      // Se o merge preservou algo que só existia localmente, envie esse resultado
+      // consolidado de volta à nuvem em vez de considerar a sincronização concluída.
+      if (mergedSig !== remoteSig) {
+        setCloudDirty(true);
+        setCloudStatus('Consolidando dados...', 'syncing');
+      } else {
+        setCloudDirty(false);
+      }
+
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
       if (!cloudDirty) setCloudStatus('Atualizado da nuvem', 'ok');
     } catch (err) {
-      console.warn('Falha ao buscar alterações:', err.message || err);
+      lastSyncError = String(err?.message || err || 'Erro desconhecido');
+      console.warn('Falha ao buscar alterações:', lastSyncError);
+      setCloudStatus('Falha ao consultar nuvem', navigator.onLine ? 'error' : 'offline');
     } finally {
       cloudSyncing = false;
       if (cloudDirty || localRevision !== revisionAtStart) scheduleCloudPush();
     }
   }
-
 
   async function syncNow() {
     if (!cloudClient || !cloudUser) { toast('Entre na sua conta para sincronizar.'); return; }
@@ -1170,6 +1223,7 @@
     if (cloudDirty) await pushCloudState();
     else await pullCloudState();
     if (!cloudDirty && !cloudSyncing) setCloudStatus('Sincronizado', 'ok');
+    else if (cloudDirty && lastSyncError) toast(`Sincronização pendente: ${lastSyncError.slice(0,120)}`);
   }
 
   function startCloudPolling() {
@@ -1178,7 +1232,10 @@
   }
 
   function setCloudStatus(text, mode='ok') {
-    if (els.syncStatusText) els.syncStatusText.textContent = text;
+    if (els.syncStatusText) {
+      els.syncStatusText.textContent = text;
+      els.syncStatusText.title = lastSyncError || '';
+    }
     document.body.classList.toggle('syncing', mode === 'syncing');
     document.body.classList.toggle('sync-error', mode === 'error');
     document.body.classList.toggle('sync-offline', mode === 'offline');
