@@ -1,0 +1,9 @@
+CORREÇÃO v1.1 — botões no iPhone
+
+Substitua na raiz do repositório GitHub os arquivos:
+- app.js
+- sw.js
+
+Depois aguarde o GitHub Pages publicar a alteração.
+
+No iPhone, feche completamente o app Financeiro e abra novamente. Se ainda carregar a versão antiga, remova o ícone da Tela de Início, abra o site no Safari, atualize a página e adicione novamente à Tela de Início.

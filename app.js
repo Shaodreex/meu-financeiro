@@ -31,6 +31,7 @@
     recurringGrid: $('#recurringGrid'), recurringEmpty: $('#recurringEmpty'),
     accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'), categoryTags: $('#categoryTags'),
     transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), accountModal: $('#accountModal'),
+    iosInstallModal: $('#iosInstallModal'),
     modalBackdrop: $('#modalBackdrop'), toast: $('#toast')
   };
 
