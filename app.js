@@ -16,6 +16,13 @@
 
   let state = loadState();
   let deferredInstallPrompt = null;
+  let cloudClient = null;
+  let cloudUser = null;
+  let cloudDirty = false;
+  let cloudPushTimer = null;
+  let cloudSyncing = false;
+  let lastCloudUpdatedAt = null;
+  let cloudPollTimer = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -32,7 +39,9 @@
     accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'), categoryTags: $('#categoryTags'),
     transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), accountModal: $('#accountModal'),
     iosInstallModal: $('#iosInstallModal'),
-    modalBackdrop: $('#modalBackdrop'), toast: $('#toast')
+    modalBackdrop: $('#modalBackdrop'), toast: $('#toast'),
+    authGate: $('#authGate'), authMessage: $('#authMessage'), syncStatusText: $('#syncStatusText'),
+    cloudUser: $('#cloudUser'), cloudUserEmail: $('#cloudUserEmail'), cloudAccountText: $('#cloudAccountText')
   };
 
   init();
@@ -44,6 +53,8 @@
     bindActions();
     renderAll();
     registerPwa();
+    bindCloudUi();
+    initCloud();
   }
 
   function clone(obj) { return JSON.parse(JSON.stringify(obj)); }
@@ -56,7 +67,8 @@
       return parsed;
     } catch { return clone(DEFAULT_STATE); }
   }
-  function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function saveLocalState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function saveState() { saveLocalState(); cloudDirty = true; scheduleCloudPush(); }
 
   function currentMonth() {
     const d = new Date();
@@ -274,9 +286,215 @@
   function exportCsv(){const list=filteredTransactions();const rows=[['Data','Tipo','Categoria','Descrição','Valor','Status','Forma de pagamento','Vencimento','Observação'],...list.map(t=>[t.date,t.type==='expense'?'Despesa':'Receita',t.category,t.description,t.amount.toFixed(2).replace('.',','),t.status==='paid'?'Pago/Recebido':'Pendente',t.payment,t.dueDate||'',t.notes||''])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`lancamentos-${selectedMonth()}.csv`);toast('CSV exportado.');}
   function downloadBackup(){const payload={app:'Meu Financeiro',exportedAt:new Date().toISOString(),state};downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`meu-financeiro-backup-${new Date().toISOString().slice(0,10)}.json`);toast('Backup baixado.');}
   function restoreBackup(e){const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const parsed=JSON.parse(reader.result);const candidate=parsed.state||parsed;if(!candidate||candidate.version!==1||!Array.isArray(candidate.transactions)||!Array.isArray(candidate.accounts))throw new Error('Formato inválido');if(!confirm('Restaurar este backup substituirá os dados atuais. Continuar?'))return;state=candidate;saveState();renderAll();toast('Backup restaurado.');}catch{alert('Não foi possível restaurar este arquivo de backup.');}finally{e.target.value='';}};reader.readAsText(file);}
-  function resetData(){if(!confirm('Isso substituirá seus dados atuais pela posição inicial importada da planilha. Deseja continuar?'))return;state=clone(DEFAULT_STATE);saveState();renderAll();toast('Sistema reiniciado.');}
+  function resetData(){if(!confirm('Isso apagará os dados atuais deste perfil e sincronizará o estado vazio com a nuvem. Deseja continuar?'))return;state=clone(DEFAULT_STATE);saveState();renderAll();toast('Sistema reiniciado.');}
   function downloadBlob(blob,filename){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   function toast(message){els.toast.textContent=message;els.toast.classList.remove('hidden');clearTimeout(toast.timer);toast.timer=setTimeout(()=>els.toast.classList.add('hidden'),2600);}
+
+  function isCloudConfigured() {
+    const cfg = window.MF_SUPABASE || {};
+    return Boolean(window.supabase?.createClient && cfg.url && cfg.publishableKey && !cfg.url.includes('COLE_AQUI') && !cfg.publishableKey.includes('COLE_AQUI'));
+  }
+
+  function bindCloudUi() {
+    $('#loginForm').addEventListener('submit', loginWithPassword);
+    $('#signupForm').addEventListener('submit', createAccount);
+    $('#showSignupBtn').addEventListener('click', () => toggleAuthPanel('signup'));
+    $('#showLoginBtn').addEventListener('click', () => toggleAuthPanel('login'));
+    $('#logoutBtn').addEventListener('click', signOutCloud);
+    $('#settingsLogoutBtn').addEventListener('click', signOutCloud);
+    $('#syncNowBtn').addEventListener('click', syncNow);
+    $('#localModeBtn').addEventListener('click', () => { els.authGate.classList.add('hidden'); setCloudStatus('Modo local', 'offline'); });
+    window.addEventListener('online', () => { setCloudStatus('Reconectando...', 'syncing'); syncNow(); });
+    window.addEventListener('offline', () => setCloudStatus('Sem internet • dados salvos localmente', 'offline'));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && cloudUser) syncNow(); });
+  }
+
+  function toggleAuthPanel(mode) {
+    $('#authLoginPanel').classList.toggle('hidden', mode !== 'login');
+    $('#authSignupPanel').classList.toggle('hidden', mode !== 'signup');
+    hideAuthMessage();
+  }
+
+  function showAuthMessage(message, isError=false) {
+    els.authMessage.textContent = message;
+    els.authMessage.classList.remove('hidden');
+    els.authMessage.style.background = isError ? '#fff1f0' : '#fff8e1';
+    els.authMessage.style.color = isError ? '#991b1b' : '#854d0e';
+  }
+  function hideAuthMessage() { els.authMessage.classList.add('hidden'); }
+
+  async function initCloud() {
+    if (!isCloudConfigured()) {
+      els.authGate.classList.remove('hidden');
+      $('#localModeBtn').classList.remove('hidden');
+      showAuthMessage('A sincronização ainda não foi configurada. Preencha o arquivo supabase-config.js com o Project URL e a Publishable Key.');
+      setCloudStatus('Supabase não configurado', 'offline');
+      return;
+    }
+    const cfg = window.MF_SUPABASE;
+    cloudClient = window.supabase.createClient(cfg.url, cfg.publishableKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+    setCloudStatus('Conectando...', 'syncing');
+    const { data: { session }, error } = await cloudClient.auth.getSession();
+    if (error) console.warn('Falha ao recuperar sessão:', error.message);
+    cloudClient.auth.onAuthStateChange((_event, nextSession) => {
+      if (nextSession?.user && nextSession.user.id !== cloudUser?.id) handleLoggedIn(nextSession.user);
+      if (!nextSession) handleLoggedOut();
+    });
+    if (session?.user) await handleLoggedIn(session.user);
+    else handleLoggedOut();
+  }
+
+  async function loginWithPassword(e) {
+    e.preventDefault();
+    if (!cloudClient) return;
+    hideAuthMessage();
+    const email = $('#loginEmail').value.trim();
+    const password = $('#loginPassword').value;
+    const btn = e.submitter; if (btn) btn.disabled = true;
+    const { error } = await cloudClient.auth.signInWithPassword({ email, password });
+    if (btn) btn.disabled = false;
+    if (error) showAuthMessage('Não foi possível entrar. Confira e-mail, senha e confirmação da conta.', true);
+  }
+
+  async function createAccount(e) {
+    e.preventDefault();
+    if (!cloudClient) return;
+    hideAuthMessage();
+    const email = $('#signupEmail').value.trim();
+    const password = $('#signupPassword').value;
+    const btn = e.submitter; if (btn) btn.disabled = true;
+    const { data, error } = await cloudClient.auth.signUp({ email, password });
+    if (btn) btn.disabled = false;
+    if (error) { showAuthMessage(error.message || 'Não foi possível criar a conta.', true); return; }
+    if (!data.session) {
+      toggleAuthPanel('login');
+      showAuthMessage('Conta criada. Verifique seu e-mail para confirmar o cadastro e depois entre aqui.');
+    }
+  }
+
+  async function handleLoggedIn(user) {
+    if (cloudUser?.id === user.id && els.authGate.classList.contains('hidden')) return;
+    cloudUser = user;
+    els.cloudUserEmail.textContent = user.email || 'Conta conectada';
+    els.cloudUser.classList.remove('hidden');
+    els.cloudAccountText.textContent = `Conectado como ${user.email || 'usuário'}. Alterações são salvas localmente e sincronizadas com a nuvem.`;
+    els.authGate.classList.add('hidden');
+    setCloudStatus('Sincronizando...', 'syncing');
+    try {
+      await bootstrapCloudState();
+      setCloudStatus('Sincronizado', 'ok');
+      startCloudPolling();
+    } catch (err) {
+      console.error(err);
+      setCloudStatus('Erro de sincronização', 'error');
+      toast('Login realizado, mas a nuvem ainda não está pronta. Confira o setup do Supabase.');
+    }
+  }
+
+  function handleLoggedOut() {
+    cloudUser = null;
+    lastCloudUpdatedAt = null;
+    clearInterval(cloudPollTimer); cloudPollTimer = null;
+    els.cloudUser.classList.add('hidden');
+    els.cloudAccountText.textContent = 'Conecte sua conta para usar os mesmos dados no iPhone e no computador.';
+    setCloudStatus('Aguardando login', 'offline');
+    if (isCloudConfigured()) els.authGate.classList.remove('hidden');
+  }
+
+  async function signOutCloud() {
+    if (!cloudClient) return;
+    if (cloudDirty) await pushCloudState();
+    await cloudClient.auth.signOut();
+    toast('Você saiu da conta.');
+  }
+
+  async function bootstrapCloudState() {
+    if (!cloudClient || !cloudUser) return;
+    const { data, error } = await cloudClient.from('finance_states').select('state,updated_at').eq('user_id', cloudUser.id).maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      const { data: inserted, error: insertError } = await cloudClient.from('finance_states').insert({ user_id: cloudUser.id, state }).select('updated_at').single();
+      if (insertError) throw insertError;
+      lastCloudUpdatedAt = inserted.updated_at;
+      cloudDirty = false;
+      return;
+    }
+    const candidate = normalizeCloudState(data.state);
+    state = candidate;
+    saveLocalState();
+    lastCloudUpdatedAt = data.updated_at;
+    cloudDirty = false;
+    renderAll();
+  }
+
+  function normalizeCloudState(candidate) {
+    if (!candidate || candidate.version !== 1) return clone(DEFAULT_STATE);
+    return {
+      version: 1,
+      categories: Array.isArray(candidate.categories) && candidate.categories.length ? candidate.categories : clone(DEFAULT_STATE.categories),
+      accounts: Array.isArray(candidate.accounts) ? candidate.accounts : [],
+      transactions: Array.isArray(candidate.transactions) ? candidate.transactions : [],
+      recurring: Array.isArray(candidate.recurring) ? candidate.recurring : []
+    };
+  }
+
+  function scheduleCloudPush() {
+    if (!cloudClient || !cloudUser) return;
+    clearTimeout(cloudPushTimer);
+    cloudPushTimer = setTimeout(() => pushCloudState(), 450);
+  }
+
+  async function pushCloudState() {
+    if (!cloudClient || !cloudUser || !cloudDirty || !navigator.onLine || cloudSyncing) return;
+    cloudSyncing = true;
+    setCloudStatus('Sincronizando...', 'syncing');
+    try {
+      const { data, error } = await cloudClient.from('finance_states').upsert({ user_id: cloudUser.id, state }, { onConflict: 'user_id' }).select('updated_at').single();
+      if (error) throw error;
+      lastCloudUpdatedAt = data.updated_at;
+      cloudDirty = false;
+      setCloudStatus('Sincronizado', 'ok');
+    } catch (err) {
+      console.error('Erro ao enviar para nuvem:', err);
+      setCloudStatus('Pendente de sincronização', navigator.onLine ? 'error' : 'offline');
+    } finally { cloudSyncing = false; }
+  }
+
+  async function pullCloudState() {
+    if (!cloudClient || !cloudUser || cloudDirty || !navigator.onLine || cloudSyncing) return;
+    try {
+      const { data, error } = await cloudClient.from('finance_states').select('state,updated_at').eq('user_id', cloudUser.id).maybeSingle();
+      if (error) throw error;
+      if (!data || data.updated_at === lastCloudUpdatedAt) return;
+      state = normalizeCloudState(data.state);
+      saveLocalState();
+      lastCloudUpdatedAt = data.updated_at;
+      renderAll();
+      setCloudStatus('Atualizado da nuvem', 'ok');
+    } catch (err) { console.warn('Falha ao buscar alterações:', err.message || err); }
+  }
+
+  async function syncNow() {
+    if (!cloudClient || !cloudUser) { toast('Entre na sua conta para sincronizar.'); return; }
+    if (!navigator.onLine) { setCloudStatus('Sem internet • dados salvos localmente', 'offline'); return; }
+    if (cloudDirty) await pushCloudState();
+    else await pullCloudState();
+    if (!cloudDirty) setCloudStatus('Sincronizado', 'ok');
+  }
+
+  function startCloudPolling() {
+    clearInterval(cloudPollTimer);
+    cloudPollTimer = setInterval(() => { if (!document.hidden) syncNow(); }, 15000);
+  }
+
+  function setCloudStatus(text, mode='ok') {
+    if (els.syncStatusText) els.syncStatusText.textContent = text;
+    document.body.classList.toggle('syncing', mode === 'syncing');
+    document.body.classList.toggle('sync-error', mode === 'error');
+    document.body.classList.toggle('sync-offline', mode === 'offline');
+  }
 
   function registerPwa(){
     const installBtn = $('#installBtn');

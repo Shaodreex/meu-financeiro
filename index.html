@@ -16,6 +16,34 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="authGate" class="auth-gate hidden" aria-live="polite">
+    <div class="auth-card">
+      <div class="auth-brand"><div class="brand-mark">MF</div><div><strong>Meu Financeiro</strong><span>sincronização segura</span></div></div>
+      <div id="authLoginPanel">
+        <p class="eyebrow">ENTRAR</p><h1>Acesse suas finanças</h1>
+        <p class="muted">Use a mesma conta no iPhone e no computador para manter tudo sincronizado.</p>
+        <form id="loginForm" class="auth-form">
+          <label class="field"><span>E-mail</span><input id="loginEmail" type="email" autocomplete="email" required /></label>
+          <label class="field"><span>Senha</span><input id="loginPassword" type="password" autocomplete="current-password" minlength="6" required /></label>
+          <button class="btn btn-primary full" type="submit">Entrar</button>
+        </form>
+        <button id="showSignupBtn" class="text-btn auth-switch" type="button">Criar minha conta</button>
+      </div>
+      <div id="authSignupPanel" class="hidden">
+        <p class="eyebrow">PRIMEIRO ACESSO</p><h1>Criar conta</h1>
+        <p class="muted">Cadastre um e-mail e uma senha. Se a confirmação por e-mail estiver ativa no Supabase, será necessário confirmar antes de entrar.</p>
+        <form id="signupForm" class="auth-form">
+          <label class="field"><span>E-mail</span><input id="signupEmail" type="email" autocomplete="email" required /></label>
+          <label class="field"><span>Senha</span><input id="signupPassword" type="password" autocomplete="new-password" minlength="6" required /></label>
+          <button class="btn btn-primary full" type="submit">Criar conta</button>
+        </form>
+        <button id="showLoginBtn" class="text-btn auth-switch" type="button">Já tenho uma conta</button>
+      </div>
+      <div id="authMessage" class="auth-message hidden"></div>
+      <button id="localModeBtn" class="btn btn-secondary full hidden" type="button">Continuar somente neste dispositivo</button>
+    </div>
+  </div>
+
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
@@ -35,7 +63,8 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="privacy-note"><span>●</span> Seus dados ficam neste dispositivo</div>
+        <div id="syncStatus" class="privacy-note"><span>●</span><span id="syncStatusText">Preparando sincronização...</span></div>
+        <div id="cloudUser" class="cloud-user hidden"><span id="cloudUserEmail"></span><button id="logoutBtn" type="button">Sair</button></div>
         <button id="installBtn" class="btn btn-secondary full hidden">Instalar aplicativo</button>
       </div>
     </aside>
@@ -155,6 +184,11 @@
             <p class="muted">Como esta versão não usa servidor, faça backups periódicos. O arquivo gerado contém todos os seus dados.</p>
             <div class="stack"><button id="backupBtn" class="btn btn-secondary">Baixar backup</button><label class="btn btn-secondary file-label">Restaurar backup<input id="restoreInput" type="file" accept="application/json,.json" hidden /></label></div>
           </article>
+          <article class="card">
+            <p class="eyebrow">NUVEM</p><h2>Sincronização</h2>
+            <p id="cloudAccountText" class="muted">Conecte sua conta para usar os mesmos dados no iPhone e no computador.</p>
+            <div class="stack"><button id="syncNowBtn" class="btn btn-secondary">Sincronizar agora</button><button id="settingsLogoutBtn" class="btn btn-secondary">Sair da conta</button></div>
+          </article>
           <article class="card danger-zone">
             <p class="eyebrow">MANUTENÇÃO</p><h2>Reiniciar sistema</h2>
             <p class="muted">Apaga os dados locais e volta ao estado inicial vazio.</p>
@@ -232,6 +266,8 @@
   </dialog>
 
   <div id="toast" class="toast hidden" role="status"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
