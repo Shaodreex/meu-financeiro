@@ -81,9 +81,12 @@
     bindThemeUi();
     repairFarFutureRecurringTransactions(false);
     // Quando há Supabase configurado, espere a carga inicial da nuvem antes de
-    // gerar recorrências. Isso evita criar/alterar estado local enquanto o
-    // bootstrap ainda está trazendo a versão remota.
-    if (!isCloudConfigured()) ensureRecurringForMonth(currentMonth(), true);
+    // normalizar faturas ou gerar recorrências. Isso evita alterar estado local
+    // enquanto o bootstrap ainda está trazendo a versão remota.
+    if (!isCloudConfigured()) {
+      repairCreditInvoiceCompetence(false);
+      ensureRecurringForMonth(currentMonth(), true);
+    }
     renderAll();
     registerPwa();
     bindCloudUi();
@@ -387,28 +390,47 @@
   }
   function cardById(id) { return state.cards.find(c => c.id === id) || null; }
   function invoiceMonthFor(card, dateStr, preferredDueDate = '') {
-    if (preferredDueDate) return monthOf(preferredDueDate);
-    if (!card || !dateStr) return monthOf(dateStr);
-    const day = Number(dateStr.slice(8,10) || 1);
-    const closingDay = Number(card.closingDay || 31);
-    const dueDay = Number(card.dueDay || 1);
-    const statementShift = day > closingDay ? 1 : 0;
-    const dueShift = dueDay <= closingDay ? 1 : 0;
-    return shiftMonth(monthOf(dateStr), statementShift + dueShift);
+    // No Meu Financeiro, a fatura é identificada pela COMPETÊNCIA da compra,
+    // e não pelo mês em que ela será paga. Ex.: compra em 27/08 pertence à
+    // fatura agosto, ainda que o vencimento automático seja 10/09.
+    return monthOf(dateStr);
   }
   function transactionInvoiceMonth(t) {
     if (!t) return '';
-    // Cobranças fixas/assinaturas pertencem à competência em que foram geradas.
-    // Isso mantém uma conta planejada para agosto na fatura de agosto, mesmo
-    // quando a data de geração ocorre após o fechamento técnico do cartão.
-    if (t.cardId && t.recurringId && t.date) return monthOf(t.date);
+    // A data do lançamento/parcela define a competência. Isso também corrige
+    // registros criados por versões antigas que gravavam o mês do vencimento.
+    if (t.cardId && t.date) return monthOf(t.date);
     return t.invoiceMonth || monthOf(t.date);
   }
   function invoiceDueDate(card, invoiceMonth) {
     if (!card || !invoiceMonth) return '';
-    const [y,m] = invoiceMonth.split('-').map(Number);
+    // A fatura da competência selecionada é paga no mês seguinte, no dia de
+    // vencimento configurado no cartão. Ex.: fatura agosto -> vence em setembro.
+    const paymentMonth = shiftMonth(invoiceMonth, 1);
+    const [y,m] = paymentMonth.split('-').map(Number);
     const last = new Date(y,m,0).getDate();
-    return `${invoiceMonth}-${String(Math.min(Number(card.dueDay || 1), last)).padStart(2,'0')}`;
+    return `${paymentMonth}-${String(Math.min(Number(card.dueDay || 1), last)).padStart(2,'0')}`;
+  }
+  function repairCreditInvoiceCompetence(persist=true) {
+    let changed = 0;
+    state.transactions.forEach(t => {
+      if (t?.type !== 'expense' || !t.cardId || !t.date) return;
+      const card = cardById(t.cardId);
+      if (!card) return;
+      const oldMonth = t.invoiceMonth || monthOf(t.date);
+      const correctMonth = monthOf(t.date);
+      // Histórico já quitado não é alterado automaticamente.
+      if (invoicePaid(t.cardId, oldMonth) || invoicePaid(t.cardId, correctMonth)) return;
+      const correctDue = invoiceDueDate(card, correctMonth);
+      const dueDay = t.dueDate ? Number(String(t.dueDate).slice(8,10)) : 0;
+      const looksAutoDue = !t.dueDate || Boolean(t.recurringId) || dueDay === Number(card.dueDay || 1);
+      let itemChanged = false;
+      if (t.invoiceMonth !== correctMonth) { t.invoiceMonth = correctMonth; itemChanged = true; }
+      if (looksAutoDue && t.dueDate !== correctDue) { t.dueDate = correctDue; itemChanged = true; }
+      if (itemChanged) { t._updatedAt = nowStamp(); changed++; }
+    });
+    if (changed && persist) saveState();
+    return changed;
   }
   function invoiceTransactions(cardId, month) {
     return state.transactions.filter(t => t.type === 'expense' && t.cardId === cardId && transactionInvoiceMonth(t) === month);
@@ -1209,7 +1231,7 @@
         </div>
         <div class="card-meta"><span class="soft-chip">Fecha dia ${c.closingDay}</span><span class="soft-chip">Vence dia ${c.dueDay}</span>${c.active===false?'<span class="soft-chip">Inativo</span>':''}</div>
         <div class="data-card-value">${money.format(invoiceTotal)}</div>
-        <div class="data-card-foot"><span>Fatura do mês • ${paid?'paga':'em aberto'}</span><span>usado ${money.format(committed)} • livre ${money.format(limitAvailable)}</span></div>
+        <div class="data-card-foot"><span>Fatura ${monthLabel(month)} • vence ${formatDate(invoiceDueDate(c,month))} • ${paid?'paga':'em aberto'}</span><span>usado ${money.format(committed)} • livre ${money.format(limitAvailable)}</span></div>
       </article>`;
     }).join('');
 
@@ -1473,6 +1495,7 @@
     try {
       await bootstrapCloudState();
       repairFarFutureRecurringTransactions(true);
+      repairCreditInvoiceCompetence(true);
       ensureRecurringForMonth(currentMonth(), true);
       setCloudStatus('Sincronizado', 'ok');
       startCloudPolling();
@@ -1709,6 +1732,7 @@
       }
 
       repairFarFutureRecurringTransactions(true);
+      repairCreditInvoiceCompetence(true);
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
       if (!cloudDirty) setCloudStatus('Atualizado da nuvem', 'ok');
