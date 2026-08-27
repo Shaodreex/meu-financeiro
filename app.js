@@ -1971,17 +1971,11 @@
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     const servedOverWeb = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
+    // v2.8.3: Service Worker pass-through (sem cache de aplicação).
+    // Mantém a instalação PWA, mas deixa HTML/JS/CSS sempre virem da rede,
+    // evitando versões híbridas no Safari/iOS.
     if ('serviceWorker' in navigator && servedOverWeb) {
-      let reloadingForWorker = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloadingForWorker) return;
-        const key = 'mf-sw-v21-reloaded';
-        if (sessionStorage.getItem(key) === '1') return;
-        reloadingForWorker = true;
-        sessionStorage.setItem(key, '1');
-        location.reload();
-      });
-      navigator.serviceWorker.register('./sw.js?v=282').then(reg => reg.update()).catch(()=>{});
+      navigator.serviceWorker.register('./sw.js?v=283').then(reg => reg.update()).catch(()=>{});
     }
 
     if (isStandalone) {

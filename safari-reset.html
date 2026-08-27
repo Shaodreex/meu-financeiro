@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <title>Recuperar Meu Financeiro</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:light dark}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#f8fafc;padding:24px;box-sizing:border-box}
+    main{width:min(520px,100%);background:#111827;border:1px solid #334155;border-radius:22px;padding:24px;box-sizing:border-box}
+    h1{font-size:24px;margin:0 0 10px}p{line-height:1.55;color:#cbd5e1}.status{margin:18px 0;padding:14px;border-radius:14px;background:#1e293b}
+    a,button{display:block;width:100%;box-sizing:border-box;border:0;border-radius:12px;padding:14px 16px;text-align:center;font-weight:700;text-decoration:none;background:#2563eb;color:#fff;font-size:16px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Recuperar Meu Financeiro</h1>
+  <p>Esta tela remove apenas caches e Service Workers antigos do Safari. Seus dados financeiros e seu banco no Supabase não são apagados.</p>
+  <div class="status" id="status">Limpando cache antigo…</div>
+  <a id="continue" href="./index.html?v=283" hidden>Abrir Meu Financeiro</a>
+</main>
+<script>
+(async()=>{
+  const status=document.getElementById('status'), link=document.getElementById('continue');
+  try{
+    if('serviceWorker' in navigator){
+      const regs=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=>r.unregister().catch(()=>false)));
+    }
+    if('caches' in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.filter(k=>k.startsWith('meu-financeiro-')).map(k=>caches.delete(k)));
+    }
+    status.textContent='Limpeza concluída. Agora abra o sistema novamente.';
+  }catch(e){
+    status.textContent='A limpeza automática terminou com uma limitação do Safari. Você ainda pode tentar abrir o sistema abaixo.';
+  }
+  link.hidden=false;
+})();
+</script>
+</body>
+</html>
