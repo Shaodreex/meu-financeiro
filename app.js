@@ -1563,14 +1563,33 @@
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     });
     setCloudStatus('Conectando...', 'syncing');
-    const { data: { session }, error } = await cloudClient.auth.getSession();
-    if (error) console.warn('Falha ao recuperar sessão:', error.message);
+
+    let session = null;
+    try {
+      const sessionResult = await withCloudTimeout(cloudClient.auth.getSession(), 'recuperar a sessão', 9000);
+      session = sessionResult?.data?.session || null;
+      if (sessionResult?.error) console.warn('Falha ao recuperar sessão:', sessionResult.error.message);
+    } catch (err) {
+      console.warn('Sessão não recuperada no bootstrap:', err?.message || err);
+      lastSyncError = err?.message || 'Não foi possível recuperar a sessão.';
+    }
+
+    // Registre o listener somente depois da recuperação inicial. Isso reduz
+    // corridas/locks de autenticação em PWAs no iOS.
     cloudClient.auth.onAuthStateChange((_event, nextSession) => {
       if (nextSession?.user && nextSession.user.id !== cloudUser?.id) handleLoggedIn(nextSession.user);
       if (!nextSession) handleLoggedOut();
     });
-    if (session?.user) await handleLoggedIn(session.user);
-    else handleLoggedOut();
+
+    if (session?.user) {
+      await handleLoggedIn(session.user);
+    } else {
+      handleLoggedOut();
+      const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+      if (standalone) {
+        showAuthMessage('Primeiro acesso pelo aplicativo do iPhone: entre novamente uma vez. O iOS mantém o armazenamento do app separado do Safari; depois do login, seus dados serão carregados do Supabase.');
+      }
+    }
   }
 
   async function loginWithPassword(e) {
@@ -1580,9 +1599,14 @@
     const email = $('#loginEmail').value.trim();
     const password = $('#loginPassword').value;
     const btn = e.submitter; if (btn) btn.disabled = true;
-    const { error } = await cloudClient.auth.signInWithPassword({ email, password });
-    if (btn) btn.disabled = false;
-    if (error) showAuthMessage('Não foi possível entrar. Confira e-mail, senha e confirmação da conta.', true);
+    try {
+      const { error } = await withCloudTimeout(cloudClient.auth.signInWithPassword({ email, password }), 'entrar na conta', 15000);
+      if (error) showAuthMessage('Não foi possível entrar. Confira e-mail, senha e confirmação da conta.', true);
+    } catch (err) {
+      showAuthMessage(err?.message || 'A autenticação demorou demais. Feche e abra o aplicativo e tente novamente.', true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   async function createAccount(e) {
@@ -1592,12 +1616,17 @@
     const email = $('#signupEmail').value.trim();
     const password = $('#signupPassword').value;
     const btn = e.submitter; if (btn) btn.disabled = true;
-    const { data, error } = await cloudClient.auth.signUp({ email, password });
-    if (btn) btn.disabled = false;
-    if (error) { showAuthMessage(error.message || 'Não foi possível criar a conta.', true); return; }
-    if (!data.session) {
-      toggleAuthPanel('login');
-      showAuthMessage('Conta criada. Verifique seu e-mail para confirmar o cadastro e depois entre aqui.');
+    try {
+      const { data, error } = await withCloudTimeout(cloudClient.auth.signUp({ email, password }), 'criar a conta', 15000);
+      if (error) { showAuthMessage(error.message || 'Não foi possível criar a conta.', true); return; }
+      if (!data.session) {
+        toggleAuthPanel('login');
+        showAuthMessage('Conta criada. Verifique seu e-mail para confirmar o cadastro e depois entre aqui.');
+      }
+    } catch (err) {
+      showAuthMessage(err?.message || 'A autenticação demorou demais. Tente novamente.', true);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -1637,9 +1666,13 @@
 
   async function signOutCloud() {
     if (!cloudClient) return;
-    if (cloudDirty) await pushCloudState();
-    await cloudClient.auth.signOut();
-    toast('Você saiu da conta.');
+    try {
+      if (cloudDirty) await pushCloudState();
+      await withCloudTimeout(cloudClient.auth.signOut(), 'sair da conta', 10000);
+      toast('Você saiu da conta.');
+    } catch (err) {
+      toast(err?.message || 'Não foi possível sair da conta agora.');
+    }
   }
 
   async function bootstrapCloudState() {
@@ -1938,7 +1971,18 @@
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     const servedOverWeb = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
-    if ('serviceWorker' in navigator && servedOverWeb) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    if ('serviceWorker' in navigator && servedOverWeb) {
+      let reloadingForWorker = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloadingForWorker) return;
+        const key = 'mf-sw-v21-reloaded';
+        if (sessionStorage.getItem(key) === '1') return;
+        reloadingForWorker = true;
+        sessionStorage.setItem(key, '1');
+        location.reload();
+      });
+      navigator.serviceWorker.register('./sw.js?v=282').then(reg => reg.update()).catch(()=>{});
+    }
 
     if (isStandalone) {
       installBtn.classList.add('hidden');
