@@ -245,3 +245,10 @@ html[data-theme="dark"] .auth-brand .brand-mark-shaodree{background:#e8eef7!impo
 .benefit-wallet-foot strong{color:var(--text)}
 html[data-theme="dark"] .benefit-chip{background:#172033;border-color:#2a3950;color:#dce7f5}
 @media(max-width:560px){.benefit-wallet{min-height:168px}.benefit-balance{font-size:27px}.benefit-wallet-meta,.benefit-wallet-foot{align-items:flex-start;flex-direction:column;gap:5px}}
+
+/* v2.7 — baixa financeira por recurso */
+.payment-source-summary{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px 18px;margin:14px 0 18px;border:1px solid var(--line);border-radius:16px;background:var(--surface-2)}
+.payment-source-summary span{font-size:.88rem;color:var(--muted)}
+.payment-source-summary strong{font-size:1.25rem;white-space:nowrap}
+
+.danger-text{color:var(--red)!important}

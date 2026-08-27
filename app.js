@@ -40,6 +40,7 @@
   let lastSyncError = '';
   let cloudPollTimer = null;
   let localRevision = 0;
+  let pendingPaymentAction = null;
   const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
   let themeMode = loadThemeMode();
 
@@ -63,7 +64,7 @@
     fuelVoucherBalance: $('#fuelVoucherBalance'), fuelVoucherMonthly: $('#fuelVoucherMonthly'), fuelVoucherSpent: $('#fuelVoucherSpent'), fuelVoucherCount: $('#fuelVoucherCount'), fuelVoucherNext: $('#fuelVoucherNext'),
     categoryTags: $('#categoryTags'),
     transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), cardModal: $('#cardModal'), accountModal: $('#accountModal'),
-    iosInstallModal: $('#iosInstallModal'),
+    paymentSourceModal: $('#paymentSourceModal'), iosInstallModal: $('#iosInstallModal'),
     modalBackdrop: $('#modalBackdrop'), toast: $('#toast'),
     authGate: $('#authGate'), authMessage: $('#authMessage'), syncStatusText: $('#syncStatusText'),
     cloudUser: $('#cloudUser'), cloudUserEmail: $('#cloudUserEmail'), cloudAccountText: $('#cloudAccountText')
@@ -417,9 +418,8 @@
   }
   function effectiveTransactionStatus(t) {
     if (t?.type === 'expense' && t.cardId) {
-      // Permite marcar uma despesa do cartão como paga para o controle pessoal.
-      // A fatura continua responsável por liberar o limite do cartão.
-      if (t.status === 'paid') return 'paid';
+      // Compras no crédito são quitadas financeiramente quando a fatura é paga.
+      // Isso evita baixar o mesmo valor duas vezes dos Recursos.
       const inv = transactionInvoiceMonth(t);
       return invoicePaid(t.cardId, inv) ? 'paid' : 'pending';
     }
@@ -497,10 +497,13 @@
     $('#recurringForm').addEventListener('submit', saveRecurring);
     $('#cardForm').addEventListener('submit', saveCard);
     $('#accountForm').addEventListener('submit', saveAccount);
+    $('#paymentSourceForm').addEventListener('submit', confirmPaymentSource);
+    $('#paymentSourceAccount').addEventListener('change', updatePaymentSourceBalance);
     $('#txPayment').addEventListener('change', updateTransactionCreditFields);
     $('#txCard').addEventListener('change', () => updateTransactionCreditDueDate(true));
     $('#txDate').addEventListener('change', () => updateTransactionCreditDueDate(true));
     $('#txDueDate').addEventListener('input', () => { delete $('#txDueDate').dataset.creditAuto; });
+    $('#txStatus').addEventListener('change', updateTransactionResourceFields);
     $$('input[name="txType"]').forEach(node => node.addEventListener('change', updateTransactionCreditFields));
     $('#recPayment').addEventListener('change', updateRecurringCreditFields);
     $('#recKind').addEventListener('change', () => {
@@ -514,17 +517,18 @@
     $$('.close-recurring').forEach(b => b.addEventListener('click', () => closeDialog(els.recurringModal)));
     $$('.close-account').forEach(b => b.addEventListener('click', () => closeDialog(els.accountModal)));
     $$('.close-card').forEach(b => b.addEventListener('click', () => closeDialog(els.cardModal)));
+    $$('.close-payment-source').forEach(b => b.addEventListener('click', () => { pendingPaymentAction = null; closeDialog(els.paymentSourceModal); }));
     els.modalBackdrop.addEventListener('click', closeAllDialogs);
-    [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.iosInstallModal].forEach(d => d.addEventListener('close', updateBackdrop));
+    [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].forEach(d => d.addEventListener('close', updateBackdrop));
     $$('.close-ios-install').forEach(b => b.addEventListener('click', () => closeDialog(els.iosInstallModal)));
   }
   function showDialog(d) { els.modalBackdrop.classList.remove('hidden'); if (!d.open) d.showModal(); }
   function closeDialog(d) { if (d.open) d.close(); updateBackdrop(); }
-  function closeAllDialogs() { [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.iosInstallModal].forEach(d => { if (d.open) d.close(); }); updateBackdrop(); }
-  function updateBackdrop() { if (![els.transactionModal,els.recurringModal,els.cardModal,els.accountModal,els.iosInstallModal].some(d => d.open)) els.modalBackdrop.classList.add('hidden'); }
+  function closeAllDialogs() { pendingPaymentAction = null; [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].forEach(d => { if (d.open) d.close(); }); updateBackdrop(); }
+  function updateBackdrop() { if (![els.transactionModal,els.recurringModal,els.cardModal,els.accountModal,els.paymentSourceModal,els.iosInstallModal].some(d => d.open)) els.modalBackdrop.classList.add('hidden'); }
 
   function renderAll() {
-    renderDashboard(); renderTransactions(); renderRecurring(); renderCards(); renderAccounts(); renderSettings(); populateCategorySelects(); populateCardSelects();
+    renderDashboard(); renderTransactions(); renderRecurring(); renderCards(); renderAccounts(); renderSettings(); populateCategorySelects(); populateCardSelects(); updateTransactionResourceFields();
   }
 
   function dashboardTransactions() { return state.transactions.filter(t => monthOf(t.date) === selectedMonth()); }
@@ -585,7 +589,8 @@
     if (!list.length) { els.recentTransactions.innerHTML = '<div class="empty-state"><strong>Nenhuma movimentação.</strong><span>Seus lançamentos mais recentes aparecerão aqui.</span></div>'; return; }
     els.recentTransactions.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
-      const paymentLabel=`${t.payment || 'Outro'}${card?` • ${card.name}`:''}`;
+      const resource=accountById(t.resourceAccountId);
+      const paymentLabel=`${t.payment || 'Outro'}${card?` • ${card.name}`:''}${resource?` • ${resource.name}`:''}`;
       return `<div class="transaction-row"><div class="tx-icon ${t.type}">${t.type === 'expense' ? '−' : '+'}</div><div class="tx-main"><strong>${escapeHtml(t.description)}</strong><span>${formatDate(t.date)} • ${escapeHtml(t.category)} • ${effectiveTransactionStatus(t) === 'paid' ? 'Pago/Recebido' : 'Pendente'}${t.cardId?` • fatura ${monthLabel(transactionInvoiceMonth(t))}`:''}</span></div><div class="tx-value"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong><span>${escapeHtml(paymentLabel)}</span></div></div>`;
     }).join('');
   }
@@ -636,12 +641,136 @@
     els.transactionsEmpty.classList.toggle('hidden', list.length > 0);
     els.transactionsTable.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
-      const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.cardId?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(transactionInvoiceMonth(t)))}</div>`:''}`;
+      const resource=accountById(t.resourceAccountId);
+      const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.cardId?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(transactionInvoiceMonth(t)))}</div>`:''}${resource?`<div class="installment-note">Pago com ${escapeHtml(resource.name)}</div>`:''}`;
       return `<tr><td>${formatDate(t.date)}</td><td><strong>${escapeHtml(t.description)}</strong>${t.purchaseDate&&t.purchaseDate!==t.date?`<div class="installment-note">Compra em ${formatDate(t.purchaseDate)}</div>`:''}</td><td>${escapeHtml(t.category)}</td><td>${payment}</td><td><span class="status ${effectiveTransactionStatus(t)}">${effectiveTransactionStatus(t) === 'paid' ? 'Pago / Recebido' : 'Pendente'}</span></td><td class="right"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong></td><td><div class="row-actions"><button class="mini-btn" data-action="toggle-paid" data-id="${t.id}" title="Alterar status">✓</button><button class="mini-btn" data-action="edit-tx" data-id="${t.id}" title="Editar">✎</button><button class="mini-btn" data-action="delete-tx" data-id="${t.id}" title="Excluir">×</button></div></td></tr>`;
     }).join('');
     $$('[data-action="edit-tx"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openTransaction(b.dataset.id);}));
     $$('[data-action="delete-tx"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();deleteTransaction(b.dataset.id);}));
     $$('[data-action="toggle-paid"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();toggleTransactionStatus(b.dataset.id);}));
+  }
+
+  function accountById(id) { return state.accounts.find(a => a.id === id) || null; }
+  function roundMoney(v) { return Math.round((Number(v) + Number.EPSILON) * 100) / 100; }
+  function populateAccountSelect(node, preferredId='') {
+    if (!node) return;
+    const current = preferredId || node.value || '';
+    node.innerHTML = state.accounts.length
+      ? '<option value="">Selecione um recurso</option>' + state.accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)} • ${money.format(a.balance)}</option>`).join('')
+      : '<option value="">Cadastre um recurso primeiro</option>';
+    node.value = state.accounts.some(a => a.id === current) ? current : '';
+  }
+  function adjustAccountBalance(accountId, delta) {
+    const account = accountById(accountId);
+    if (!account) return false;
+    account.balance = roundMoney(Number(account.balance || 0) + Number(delta || 0));
+    account._updatedAt = nowStamp();
+    return true;
+  }
+  function transactionHasResourceSettlement(t) {
+    return Boolean(t?.resourceAccountId && Number(t?.resourceAmount || 0) > 0);
+  }
+  function reverseTransactionSettlement(t) {
+    if (!transactionHasResourceSettlement(t)) return false;
+    const restored = adjustAccountBalance(t.resourceAccountId, Number(t.resourceAmount || 0));
+    if (restored) {
+      t.resourceAccountId = null;
+      t.resourceAmount = 0;
+      t.resourceSettledAt = null;
+      t._updatedAt = nowStamp();
+    }
+    return restored;
+  }
+  function applyTransactionSettlement(t, accountId, amount=t.amount) {
+    const account = accountById(accountId);
+    const value = roundMoney(Number(amount || 0));
+    if (!account || !(value > 0)) return { ok:false, message:'Selecione um recurso válido.' };
+    if (Number(account.balance || 0) + 0.0001 < value) return { ok:false, message:`Saldo insuficiente em ${account.name}. Disponível: ${money.format(account.balance)}.` };
+    adjustAccountBalance(accountId, -value);
+    t.status = 'paid';
+    t.resourceAccountId = accountId;
+    t.resourceAmount = value;
+    t.resourceSettledAt = new Date().toISOString();
+    t._updatedAt = nowStamp();
+    return { ok:true, account };
+  }
+  function updateTransactionResourceFields() {
+    const type = $('input[name="txType"]:checked')?.value;
+    const payment = $('#txPayment').value;
+    const paid = $('#txStatus').value === 'paid';
+    const directExpense = type === 'expense' && paid && payment !== 'Crédito' && !isBenefitPayment(payment);
+    const field = $('#txAccountField');
+    if (!field) return;
+    field.classList.toggle('hidden', !directExpense);
+    if (directExpense) {
+      const existing = state.transactions.find(t => t.id === $('#transactionId').value);
+      populateAccountSelect($('#txAccount'), existing?.resourceAccountId || '');
+    }
+  }
+  function openPaymentSource(action) {
+    if (!state.accounts.length) {
+      toast('Cadastre um recurso antes de registrar o pagamento.');
+      showView('accounts');
+      return;
+    }
+    pendingPaymentAction = action;
+    $('#paymentSourceTitle').textContent = action.kind === 'invoice' ? 'Pagar fatura' : 'Registrar pagamento';
+    $('#paymentSourceDescription').textContent = action.description || 'Selecione de onde saiu o dinheiro deste pagamento.';
+    $('#paymentSourceAmount').textContent = money.format(action.amount || 0);
+    populateAccountSelect($('#paymentSourceAccount'), action.preferredAccountId || '');
+    updatePaymentSourceBalance();
+    showDialog(els.paymentSourceModal);
+  }
+  function updatePaymentSourceBalance() {
+    const account = accountById($('#paymentSourceAccount')?.value);
+    const amount = Number(pendingPaymentAction?.amount || 0);
+    const node = $('#paymentSourceBalance');
+    if (!node) return;
+    if (!account) { node.textContent = 'Selecione um recurso válido.'; return; }
+    const after = roundMoney(Number(account.balance || 0) - amount);
+    node.textContent = `Saldo atual: ${money.format(account.balance)} • após pagamento: ${money.format(after)}`;
+    node.classList.toggle('danger-text', after < -0.001);
+  }
+  function confirmPaymentSource(e) {
+    e.preventDefault();
+    if (!pendingPaymentAction) return;
+    const accountId = $('#paymentSourceAccount').value;
+    const account = accountById(accountId);
+    const amount = roundMoney(Number(pendingPaymentAction.amount || 0));
+    if (!account) { toast('Selecione um recurso válido.'); return; }
+    if (Number(account.balance || 0) + 0.0001 < amount) { toast(`Saldo insuficiente em ${account.name}.`); updatePaymentSourceBalance(); return; }
+
+    if (pendingPaymentAction.kind === 'transaction') {
+      const t = state.transactions.find(x => x.id === pendingPaymentAction.transactionId);
+      if (!t) { toast('Lançamento não encontrado.'); return; }
+      const result = applyTransactionSettlement(t, accountId, amount);
+      if (!result.ok) { toast(result.message); return; }
+      saveState();
+      pendingPaymentAction = null;
+      closeDialog(els.paymentSourceModal);
+      renderAll();
+      toast(`Pago com ${result.account.name}. Saldo do recurso: ${money.format(result.account.balance)}.`);
+      return;
+    }
+
+    if (pendingPaymentAction.kind === 'invoice') {
+      const { cardId, month } = pendingPaymentAction;
+      const txs = invoiceTransactions(cardId, month);
+      if (!txs.length) { toast('Essa fatura não possui compras.'); return; }
+      const currentTotal = roundMoney(sum(txs.map(t => t.amount)));
+      if (Math.abs(currentTotal - amount) > 0.01) { toast('A fatura mudou. Abra novamente e tente pagar.'); pendingPaymentAction = null; closeDialog(els.paymentSourceModal); renderAll(); return; }
+      adjustAccountBalance(accountId, -currentTotal);
+      const id = `${cardId}:${month}`;
+      const existing = state.cardPayments.find(p => entityId('cardPayments', p) === id);
+      const item = touchEntity({ id, cardId, month, paid:true, paidAt:new Date().toISOString(), resourceAccountId:accountId, resourceAmount:currentTotal });
+      if (existing) state.cardPayments[state.cardPayments.indexOf(existing)] = item;
+      else state.cardPayments.push(item);
+      saveState();
+      pendingPaymentAction = null;
+      closeDialog(els.paymentSourceModal);
+      renderAll();
+      toast(`Fatura paga com ${account.name}. Saldo do recurso: ${money.format(account.balance)}.`);
+    }
   }
 
   function populateCategorySelects() {
@@ -705,6 +834,7 @@
       const hint = $('#txBenefitHint');
       if (hint) hint.textContent = `Débito direto do ${$('#txPayment').value}. Saldo atual: ${money.format(benefitCurrentBalance(key))}. Esse gasto não reduz seu saldo disponível em dinheiro.`;
     }
+    updateTransactionResourceFields();
   }
   function openTransaction(id=null) {
     populateCategorySelects();
@@ -715,6 +845,7 @@
     $('#txDate').value = new Date().toISOString().slice(0,10);
     $('#txStatus').value='paid';
     $('#txInstallments').value='1';
+    populateAccountSelect($('#txAccount'));
     $('#transactionModalTitle').textContent = id ? 'Editar lançamento' : 'Novo lançamento';
     if (id) {
       const t=state.transactions.find(x=>x.id===id); if(!t)return;
@@ -729,6 +860,7 @@
       $('#txDueDate').value=t.dueDate||'';
       $('#txNotes').value=t.notes||'';
       if (t.cardId) $('#txCard').value=t.cardId;
+      if (t.resourceAccountId) $('#txAccount').value=t.resourceAccountId;
       if (t.installmentTotal > 1) $('#transactionModalTitle').textContent = `Editar parcela ${t.installmentNumber}/${t.installmentTotal}`;
     }
     updateTransactionCreditFields();
@@ -747,29 +879,67 @@
     const cardId=payment==='Crédito' ? ($('#txCard').value || null) : null;
     const card=cardById(cardId);
     const benefitExpense = type === 'expense' && isBenefitPayment(payment);
+    const directPaidExpense = type === 'expense' && payment !== 'Crédito' && !benefitExpense && $('#txStatus').value === 'paid';
+    const selectedAccountId = directPaidExpense ? ($('#txAccount').value || '') : '';
     if (payment==='Crédito' && type==='expense' && !card) { toast('Cadastre e selecione um cartão para compras no crédito.'); return; }
+    if (directPaidExpense && !selectedAccountId && !(existing && existing.status === 'paid' && !transactionHasResourceSettlement(existing))) { toast('Selecione de qual recurso saiu este pagamento.'); return; }
 
     const baseDescription=$('#txDescription').value.trim();
     const requestedDueDate=$('#txDueDate').value;
     const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:benefitExpense?'paid':$('#txStatus').value,payment,dueDate:benefitExpense?'':requestedDueDate,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
 
     if (existing) {
+      // Evita alterar compras de uma fatura já quitada: primeiro reabra a fatura.
+      if (existing.cardId && invoicePaid(existing.cardId, transactionInvoiceMonth(existing))) {
+        toast('Esta compra pertence a uma fatura paga. Reabra a fatura antes de editar.');
+        return;
+      }
+      const accountsSnapshot = clone(state.accounts);
       const updated=touchEntity({...existing,...base,cardId});
       const existingWasBenefit = existing.type === 'expense' && isBenefitPayment(existing.payment);
       updated.benefitTracked = benefitExpense ? (existingWasBenefit ? existing.benefitTracked === true : true) : false;
+
+      // Se o lançamento já havia baixado um recurso, devolva primeiro o valor antigo.
+      if (transactionHasResourceSettlement(existing)) {
+        const oldAccount = accountById(existing.resourceAccountId);
+        if (!oldAccount) { toast('O recurso usado no pagamento anterior não existe mais.'); return; }
+        adjustAccountBalance(existing.resourceAccountId, Number(existing.resourceAmount || existing.amount || 0));
+        updated.resourceAccountId = null;
+        updated.resourceAmount = 0;
+        updated.resourceSettledAt = null;
+      }
+
       if (payment==='Crédito' && type==='expense') {
         updated.purchaseDate=existing.purchaseDate || date;
         updated.invoiceMonth=existing.installmentTotal>1 ? existing.invoiceMonth : invoiceMonthFor(card,date,requestedDueDate);
         updated.dueDate=requestedDueDate || invoiceDueDate(card,updated.invoiceMonth);
+        updated.status='pending';
+        updated.resourceAccountId=null; updated.resourceAmount=0; updated.resourceSettledAt=null;
       } else {
         updated.cardId=null; updated.invoiceMonth=null; updated.purchaseDate=null;
       }
+
+      // Novo pagamento direto: baixe do recurso selecionado. Para registros antigos
+      // já pagos e sem vínculo de recurso, preserve o legado até o usuário reabrir/pagar.
+      if (directPaidExpense) {
+        const legacyPaidWithoutResource = existing.status === 'paid' && !transactionHasResourceSettlement(existing) && !selectedAccountId;
+        if (!legacyPaidWithoutResource) {
+          const result = applyTransactionSettlement(updated, selectedAccountId, amount);
+          if (!result.ok) { state.accounts = accountsSnapshot; toast(result.message); return; }
+        }
+      } else {
+        updated.resourceAccountId=null; updated.resourceAmount=0; updated.resourceSettledAt=null;
+      }
+
       const idx=state.transactions.findIndex(t=>t.id===existing.id);
       state.transactions[idx]=updated;
       saveState(); closeDialog(els.transactionModal); renderAll();
       if (benefitExpense) {
         const key = benefitKeyFromPayment(payment);
         toast(`${payment} • saldo ${money.format(benefitCurrentBalance(key))}`);
+      } else if (updated.resourceAccountId) {
+        const acc = accountById(updated.resourceAccountId);
+        toast(`Lançamento atualizado • pago com ${acc?.name || 'recurso'}.`);
       } else {
         toast(updated.cardId ? `Lançamento atualizado • ${card.name} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento atualizado.');
       }
@@ -811,18 +981,49 @@
       tx.invoiceMonth=invoiceMonthFor(card,date,requestedDueDate);
       tx.dueDate=requestedDueDate || invoiceDueDate(card,tx.invoiceMonth);
       tx.status='pending';
+    } else if (directPaidExpense) {
+      const result = applyTransactionSettlement(tx, selectedAccountId, amount);
+      if (!result.ok) { toast(result.message); return; }
     }
     state.transactions.push(tx);
     saveState(); closeDialog(els.transactionModal); renderAll();
     if (benefitExpense) {
       const key = benefitKeyFromPayment(payment);
       toast(`${payment} • saldo restante ${money.format(benefitCurrentBalance(key))}`);
+    } else if (tx.resourceAccountId) {
+      const acc = accountById(tx.resourceAccountId);
+      toast(`Lançamento salvo • pago com ${acc?.name || 'recurso'} • saldo ${money.format(acc?.balance || 0)}.`);
     } else {
       toast(tx.cardId ? `Compra vinculada ao ${card.name} • fatura ${monthLabel(tx.invoiceMonth)} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento salvo.');
     }
   }
-  function deleteTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm(`Excluir “${t.description}”?`))return;state.transactions=state.transactions.filter(x=>x.id!==id);markDeleted('transactions',id);saveState();renderAll();toast('Lançamento excluído.');}
-  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&isBenefitPayment(t.payment)){toast('Gastos com vale são debitados diretamente do saldo do benefício.');return;}const current=effectiveTransactionStatus(t);t.status=current==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
+  function deleteTransaction(id){
+    const t=state.transactions.find(x=>x.id===id);if(!t)return;
+    if (t.cardId && invoicePaid(t.cardId, transactionInvoiceMonth(t))) { toast('Reabra a fatura antes de excluir uma compra já quitada.'); return; }
+    if(!confirm(`Excluir “${t.description}”?`))return;
+    if (transactionHasResourceSettlement(t)) reverseTransactionSettlement(t);
+    state.transactions=state.transactions.filter(x=>x.id!==id);markDeleted('transactions',id);saveState();renderAll();toast('Lançamento excluído.');
+  }
+  function toggleTransactionStatus(id){
+    const t=state.transactions.find(x=>x.id===id);if(!t)return;
+    if(t.type==='expense'&&isBenefitPayment(t.payment)){toast('Gastos com vale são debitados diretamente do saldo do benefício.');return;}
+    if(t.type==='expense'&&t.cardId){toast('Compras no crédito são quitadas pela fatura. Abra “Cartões e faturas” e pague a fatura escolhendo o recurso.');return;}
+    const current=effectiveTransactionStatus(t);
+    if (t.type === 'expense') {
+      if (current === 'paid') {
+        const hadSettlement = transactionHasResourceSettlement(t);
+        if (hadSettlement && !reverseTransactionSettlement(t)) { toast('Não foi possível devolver o valor ao recurso original.'); return; }
+        t.status='pending';t._updatedAt=nowStamp();saveState();renderAll();
+        toast(hadSettlement?'Pagamento desfeito e valor devolvido ao recurso.':'Marcado como pendente.');
+      } else {
+        openPaymentSource({kind:'transaction',transactionId:t.id,amount:t.amount,description:`${t.description} • ${money.format(t.amount)}`});
+      }
+      return;
+    }
+    // Receitas continuam sendo controladas por status; Recursos representam a
+    // posição financeira manual e não recebem crédito automático nesta versão.
+    t.status=current==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como recebido.':'Marcado como pendente.');
+  }
 
   function recurringKindLabel(kind) {
     return ({fixed:'Conta fixa',subscription:'Assinatura',internet:'Chip / internet',income:'Receita recorrente',other:'Recorrente'})[kind] || 'Recorrente';
@@ -1019,7 +1220,7 @@
           const due=invoiceDueDate(card,month);
           return `<div class="invoice-row">
             <div class="invoice-row-main"><strong>${escapeHtml(card.name)}</strong><span>${txs.length} ${txs.length===1?'compra':'compras'} • vence ${formatDate(due)}</span></div>
-            <div class="invoice-row-value"><strong>${money.format(total)}</strong><span>${paid?'Fatura paga':'Fatura em aberto'}</span></div>
+            <div class="invoice-row-value"><strong>${money.format(total)}</strong><span>${paid ? `Fatura paga${state.cardPayments.find(p=>p.cardId===card.id&&p.month===month&&p.paid)?.resourceAccountId ? ` • ${escapeHtml(accountById(state.cardPayments.find(p=>p.cardId===card.id&&p.month===month&&p.paid)?.resourceAccountId)?.name || 'recurso')}` : ''}` : 'Fatura em aberto'}</span></div>
             <div class="row-actions"><button class="btn ${paid?'btn-secondary':'btn-primary'}" data-invoice-toggle="${card.id}">${paid?'Reabrir fatura':'Marcar como paga'}</button></div>
           </div>`;
         }).join('')
@@ -1081,10 +1282,27 @@
     const isPaid=invoicePaid(cardId,month);
     const id=`${cardId}:${month}`;
     const existing=state.cardPayments.find(p=>entityId('cardPayments',p)===id);
-    const item=touchEntity({id,cardId,month,paid:!isPaid,paidAt:!isPaid?new Date().toISOString():null});
-    if(existing){const idx=state.cardPayments.indexOf(existing);state.cardPayments[idx]=item;}else state.cardPayments.push(item);
-    saveState();renderAll();toast(isPaid?'Fatura reaberta. Limite comprometido novamente.':'Fatura marcada como paga. Limite liberado.');
+    const total=roundMoney(sum(txs.map(t=>t.amount)));
+    const card=cardById(cardId);
+
+    if (!isPaid) {
+      openPaymentSource({kind:'invoice',cardId,month,amount:total,description:`Fatura ${card?.name || ''} • ${monthLabel(month)}`});
+      return;
+    }
+
+    // Ao reabrir uma fatura, devolva ao recurso o valor que havia sido baixado.
+    let restored=false;
+    if (existing?.resourceAccountId && Number(existing.resourceAmount || 0) > 0) {
+      const account=accountById(existing.resourceAccountId);
+      if(!account){toast('O recurso usado para pagar esta fatura não existe mais.');return;}
+      adjustAccountBalance(existing.resourceAccountId, Number(existing.resourceAmount));
+      restored=true;
+    }
+    const item=touchEntity({id,cardId,month,paid:false,paidAt:null,resourceAccountId:null,resourceAmount:0});
+    if(existing){state.cardPayments[state.cardPayments.indexOf(existing)]=item;}else state.cardPayments.push(item);
+    saveState();renderAll();toast(restored?'Fatura reaberta. O valor foi devolvido ao recurso utilizado no pagamento.':'Fatura reaberta.');
   }
+
 
 
   function renderAccounts(){
@@ -1113,13 +1331,13 @@
     if(els.foodVoucherNext) els.foodVoucherNext.textContent=`próximo crédito ${formatDate(benefitNextCreditDate('food'))}`;
     if(els.fuelVoucherNext) els.fuelVoucherNext.textContent=`próximo crédito ${formatDate(benefitNextCreditDate('fuel'))}`;
 
-    els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Atualize quando necessário</span><span>posição manual</span></div></article>`).join('');
+    els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Pagamentos baixam automaticamente</span><span>saldo atual</span></div></article>`).join('');
     $$('[data-acc-edit]').forEach(b=>b.addEventListener('click',()=>openAccount(b.dataset.accEdit)));
     $$('[data-acc-delete]').forEach(b=>b.addEventListener('click',()=>deleteAccount(b.dataset.accDelete)));
   }
   function openAccount(id=null){$('#accountForm').reset();$('#accountId').value='';$('#accountModalTitle').textContent=id?'Editar recurso':'Novo recurso';if(id){const a=state.accounts.find(x=>x.id===id);if(!a)return;$('#accountId').value=a.id;$('#accountName').value=a.name;$('#accountBalance').value=formatInputAmount(a.balance);}showDialog(els.accountModal);}
   function saveAccount(e){e.preventDefault();const balance=parseAmount($('#accountBalance').value);if(!Number.isFinite(balance)){toast('Informe um valor válido.');return;}const id=$('#accountId').value||uid();const item=touchEntity({id,name:$('#accountName').value.trim(),balance});const idx=state.accounts.findIndex(x=>x.id===id);if(idx>=0)state.accounts[idx]=item;else state.accounts.push(item);saveState();closeDialog(els.accountModal);renderAll();toast(idx>=0?'Recurso atualizado.':'Recurso adicionado.');}
-  function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a||!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);markDeleted('accounts',id);saveState();renderAll();toast('Recurso excluído.');}
+  function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a)return;const linkedTx=state.transactions.some(t=>t.resourceAccountId===id&&Number(t.resourceAmount||0)>0);const linkedInvoice=state.cardPayments.some(p=>p.paid&&p.resourceAccountId===id&&Number(p.resourceAmount||0)>0);if(linkedTx||linkedInvoice){toast('Esse recurso possui pagamentos vinculados. Reabra ou ajuste esses pagamentos antes de excluir.');return;}if(!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);markDeleted('accounts',id);saveState();renderAll();toast('Recurso excluído.');}
 
   function renderSettings(){els.categoryTags.innerHTML=state.categories.map(c=>`<span class="tag">${escapeHtml(c)}<button data-cat-delete="${escapeHtml(c)}" title="Excluir">×</button></span>`).join('');$$('[data-cat-delete]').forEach(b=>b.addEventListener('click',()=>deleteCategory(b.dataset.catDelete)));renderThemeControls();}
   function addCategory(e){e.preventDefault();const input=$('#newCategory');const name=input.value.trim();if(!name)return;if(state.categories.some(c=>c.toLowerCase()===name.toLowerCase())){toast('Essa categoria já existe.');return;}state.categories.push(name);state.categories.sort((a,b)=>a.localeCompare(b,'pt-BR'));input.value='';saveState();renderAll();toast('Categoria adicionada.');}
