@@ -195,3 +195,17 @@ html[data-theme="dark"] .account-summary,html[data-theme="dark"] .invoice-row{bo
 html[data-theme="dark"] .month-select input{color:var(--text)}
 html[data-theme="dark"] select option{background:#111827;color:#e8eef7}
 
+
+/* v2.4.1 — ícones vetoriais e identidade Shaodree */
+.brand-mark-shaodree{overflow:hidden;background:linear-gradient(145deg,#eef5ff,#dbe8f8)!important;color:#0f172a!important;box-shadow:inset 0 0 0 1px rgba(148,163,184,.22)}
+.brand-mark-shaodree svg{width:34px;height:34px;display:block;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+.brand-mark-shaodree .brand-s{stroke-width:3.7}
+.brand-mark-shaodree .brand-bars{stroke:#2563eb;stroke-width:2.5}
+.auth-brand .brand-mark-shaodree{background:linear-gradient(145deg,#0f172a,#1e293b)!important;color:#fff!important;box-shadow:none}
+html[data-theme="dark"] .brand-mark-shaodree{background:linear-gradient(145deg,#e8f1fb,#cbdced)!important;color:#0f172a!important}
+html[data-theme="dark"] .auth-brand .brand-mark-shaodree{background:linear-gradient(145deg,#e8f1fb,#cbdced)!important;color:#0f172a!important}
+.nav-item{min-height:46px}
+.nav-item .nav-icon{width:22px;height:22px;display:grid;place-items:center;flex:0 0 22px}
+.nav-item .nav-icon svg{width:20px;height:20px;display:block;fill:none;stroke:currentColor;stroke-width:1.85;stroke-linecap:round;stroke-linejoin:round;overflow:visible}
+.nav-item.active .nav-icon svg{stroke-width:2}
+@media(max-width:760px){.nav-item .nav-icon{width:23px;height:23px;flex-basis:23px}.nav-item .nav-icon svg{width:21px;height:21px}.brand-mark-shaodree{width:46px;height:46px;border-radius:14px}.brand-mark-shaodree svg{width:36px;height:36px}}
