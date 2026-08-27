@@ -1,4 +1,4 @@
-const CACHE='meu-financeiro-v19-quick-expense';
+const CACHE='meu-financeiro-v20-sync-resilient';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./supabase-config.js','./manifest.webmanifest','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png','./assets/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {

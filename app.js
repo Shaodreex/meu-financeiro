@@ -35,6 +35,8 @@
   let cloudDirty = localStorage.getItem(DIRTY_KEY) === '1';
   let cloudPushTimer = null;
   let cloudSyncing = false;
+  let syncRequested = false;
+  const CLOUD_TIMEOUT_MS = 12000;
   let lastCloudUpdatedAt = null;
   let cloudRevision = null;
   let lastSyncError = '';
@@ -1649,19 +1651,25 @@
     cloudSyncing = true;
 
     try {
-      const { data, error } = await cloudClient
-        .from('finance_states')
-        .select('state,updated_at,revision')
-        .eq('user_id', cloudUser.id)
-        .maybeSingle();
+      const { data, error } = await withCloudTimeout(
+        cloudClient
+          .from('finance_states')
+          .select('state,updated_at,revision')
+          .eq('user_id', cloudUser.id)
+          .maybeSingle(),
+        'carregar seus dados'
+      );
       if (error) throw error;
 
       if (!data) {
-        const { data: inserted, error: insertError } = await cloudClient
-          .from('finance_states')
-          .insert({ user_id: cloudUser.id, state: stateSnapshot })
-          .select('state,updated_at,revision')
-          .single();
+        const { data: inserted, error: insertError } = await withCloudTimeout(
+          cloudClient
+            .from('finance_states')
+            .insert({ user_id: cloudUser.id, state: stateSnapshot })
+            .select('state,updated_at,revision')
+            .single(),
+          'criar seu estado financeiro na nuvem'
+        );
         if (insertError) throw insertError;
         lastCloudUpdatedAt = inserted.updated_at;
         cloudRevision = Number(inserted.revision || 0);
@@ -1703,15 +1711,29 @@
   function scheduleCloudPush(delay = 500) {
     if (!cloudClient || !cloudUser) return;
     clearTimeout(cloudPushTimer);
-    cloudPushTimer = setTimeout(() => pushCloudState(), delay);
+    // Sempre passe pelo coordenador syncNow. Assim, se uma sincronização já
+    // estiver em andamento, a nova tentativa fica enfileirada em vez de sumir.
+    cloudPushTimer = setTimeout(() => syncNow(), delay);
+  }
+
+  function withCloudTimeout(promiseLike, label = 'sincronização', timeoutMs = CLOUD_TIMEOUT_MS) {
+    let timer;
+    const source = Promise.resolve(promiseLike);
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Tempo limite excedido ao ${label}. Verifique a conexão e tente novamente.`)), timeoutMs);
+    });
+    return Promise.race([source, timeout]).finally(() => clearTimeout(timer));
   }
 
   async function readCloudEnvelope() {
-    const { data, error } = await cloudClient
-      .from('finance_states')
-      .select('state,updated_at,revision')
-      .eq('user_id', cloudUser.id)
-      .maybeSingle();
+    const { data, error } = await withCloudTimeout(
+      cloudClient
+        .from('finance_states')
+        .select('state,updated_at,revision')
+        .eq('user_id', cloudUser.id)
+        .maybeSingle(),
+      'consultar a nuvem'
+    );
     if (error) throw error;
     return data;
   }
@@ -1729,11 +1751,14 @@
       // O RPC faz a comparação e o update dentro de uma transação no Postgres.
       let remote = await readCloudEnvelope();
       if (!remote) {
-        const { data: inserted, error: insertError } = await cloudClient
-          .from('finance_states')
-          .insert({ user_id: cloudUser.id, state: workingState })
-          .select('state,updated_at,revision')
-          .single();
+        const { data: inserted, error: insertError } = await withCloudTimeout(
+          cloudClient
+            .from('finance_states')
+            .insert({ user_id: cloudUser.id, state: workingState })
+            .select('state,updated_at,revision')
+            .single(),
+          'inicializar a sincronização'
+        );
         if (insertError && insertError.code !== '23505') throw insertError;
         remote = insertError ? await readCloudEnvelope() : inserted;
       }
@@ -1746,12 +1771,15 @@
       for (let attempt = 0; attempt < 6; attempt++) {
         workingState = mergeStates(workingState, remote.state, 'local');
 
-        const { data: result, error: rpcError } = await cloudClient
-          .rpc('mf_sync_finance_state', {
-            p_state: workingState,
-            p_expected_revision: expectedRevision
-          })
-          .single();
+        const { data: result, error: rpcError } = await withCloudTimeout(
+          cloudClient
+            .rpc('mf_sync_finance_state', {
+              p_state: workingState,
+              p_expected_revision: expectedRevision
+            })
+            .single(),
+          'enviar alterações'
+        );
         if (rpcError) throw rpcError;
         if (!result) throw new Error('O servidor não retornou confirmação da sincronização.');
 
@@ -1804,8 +1832,13 @@
       }
     } finally {
       cloudSyncing = false;
-      // Retry com pequena espera, inclusive após falha. O polling também continua ativo.
-      if (cloudDirty && navigator.onLine) scheduleCloudPush(lastSyncError ? 5000 : 650);
+      // Qualquer pedido feito enquanto o request estava em andamento é processado
+      // logo depois. Isso é importante no iPhone quando o app volta do background.
+      const queued = syncRequested;
+      syncRequested = false;
+      if (navigator.onLine && (queued || cloudDirty)) {
+        scheduleCloudPush(lastSyncError ? 2500 : 250);
+      }
     }
   }
 
@@ -1857,18 +1890,31 @@
       setCloudStatus('Falha ao consultar nuvem', navigator.onLine ? 'error' : 'offline');
     } finally {
       cloudSyncing = false;
-      if (cloudDirty || localRevision !== revisionAtStart) scheduleCloudPush();
+      const queued = syncRequested;
+      syncRequested = false;
+      if (navigator.onLine && (queued || cloudDirty || localRevision !== revisionAtStart)) {
+        scheduleCloudPush(lastSyncError ? 2500 : 250);
+      }
     }
   }
 
   async function syncNow() {
     if (!cloudClient || !cloudUser) { toast('Entre na sua conta para sincronizar.'); return; }
     if (!navigator.onLine) { setCloudStatus('Sem internet • dados salvos localmente', 'offline'); return; }
-    if (cloudSyncing) return;
+    if (cloudSyncing) {
+      syncRequested = true;
+      setCloudStatus('Sincronização na fila...', 'syncing');
+      return;
+    }
+    syncRequested = false;
     if (cloudDirty) await pushCloudState();
     else await pullCloudState();
-    if (!cloudDirty && !cloudSyncing) setCloudStatus('Sincronizado', 'ok');
-    else if (cloudDirty && lastSyncError) toast(`Sincronização pendente: ${lastSyncError.slice(0,120)}`);
+    if (!cloudDirty && !cloudSyncing) {
+      lastSyncError = '';
+      setCloudStatus('Sincronizado', 'ok');
+    } else if (cloudDirty && lastSyncError) {
+      toast(`Sincronização pendente: ${lastSyncError.slice(0,120)}`);
+    }
   }
 
   function startCloudPolling() {
