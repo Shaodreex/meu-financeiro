@@ -13,12 +13,34 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Meu Financeiro</title>
-  <link rel="manifest" href="manifest.webmanifest?v=283" />
+  <script>
+    (function(){
+      function showBootError(message){
+        var box=document.getElementById('bootDiagnostic');
+        if(!box)return;
+        box.style.display='block';
+        box.textContent='Falha ao iniciar o aplicativo: '+message;
+      }
+      window.MF_SHOW_BOOT_ERROR=showBootError;
+      window.addEventListener('error',function(e){
+        var src=e && e.target && e.target.src;
+        showBootError(src ? 'não foi possível carregar '+src : (e.message || 'erro de JavaScript'));
+      },true);
+      window.addEventListener('unhandledrejection',function(e){
+        var r=e.reason; showBootError((r && r.message) || String(r || 'erro assíncrono'));
+      });
+      setTimeout(function(){
+        if(document.documentElement.getAttribute('data-mf-boot')!=='ok') showBootError('o JavaScript principal não concluiu a inicialização.');
+      },9000);
+    })();
+  </script>
+  <link rel="manifest" href="manifest.webmanifest?v=284" />
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
-  <link rel="stylesheet" href="styles.css?v=283" />
+  <link rel="stylesheet" href="styles.css?v=284" />
 </head>
 <body>
+  <div id="bootDiagnostic" style="display:none;position:fixed;z-index:99999;left:12px;right:12px;top:12px;padding:12px 14px;border-radius:12px;background:#7f1d1d;color:#fff;font:600 13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.22)"></div>
   <div id="authGate" class="auth-gate hidden" aria-live="polite">
     <div class="auth-card">
       <div class="auth-brand"><div class="brand-mark brand-mark-shaodree" aria-label="Shaodree"><span class="brand-letter" aria-hidden="true">S</span></div><div><strong>Meu Financeiro</strong><span>sincronização segura</span></div></div>
@@ -403,8 +425,8 @@
   </dialog>
 
   <div id="toast" class="toast hidden" role="status"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/dist/umd/supabase.js"></script>
-  <script src="supabase-config.js?v=283"></script>
-  <script src="app.js?v=283"></script>
+  <script src="supabase-lite.js?v=284"></script>
+  <script src="supabase-config.js?v=284"></script>
+  <script src="app.js?v=284"></script>
 </body>
 </html>

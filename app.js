@@ -74,6 +74,7 @@
 
   applyTheme(themeMode, false, false);
   init();
+  document.documentElement.setAttribute('data-mf-boot', 'ok');
 
   function init() {
     els.monthFilter.value = currentMonth();
@@ -1971,11 +1972,13 @@
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     const servedOverWeb = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
-    // v2.8.3: Service Worker pass-through (sem cache de aplicação).
-    // Mantém a instalação PWA, mas deixa HTML/JS/CSS sempre virem da rede,
-    // evitando versões híbridas no Safari/iOS.
+    // v2.8.4: Safari/iOS — não registre Service Worker.
+    // O app depende do Supabase e prioriza estabilidade online. Remova qualquer
+    // worker antigo que ainda possa estar controlando esta origem.
     if ('serviceWorker' in navigator && servedOverWeb) {
-      navigator.serviceWorker.register('./sw.js?v=283').then(reg => reg.update()).catch(()=>{});
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(reg => reg.unregister().catch(()=>{}));
+      }).catch(()=>{});
     }
 
     if (isStandalone) {
