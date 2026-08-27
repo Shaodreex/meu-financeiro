@@ -78,6 +78,7 @@
     bindModals();
     bindActions();
     bindThemeUi();
+    repairFarFutureRecurringTransactions(false);
     // Quando há Supabase configurado, espere a carga inicial da nuvem antes de
     // gerar recorrências. Isso evita criar/alterar estado local enquanto o
     // bootstrap ainda está trazendo a versão remota.
@@ -283,7 +284,12 @@
     });
   }
   function bindThemeUi() {
-    $$('[data-theme-mode]').forEach(button => button.addEventListener('click', () => {
+    // Restrinja os listeners de tema exclusivamente ao card de Aparência.
+    // Isso evita que botões dinâmicos de outras telas possam ser interpretados
+    // como seletores de tema em navegadores móveis.
+    $$('.appearance-card [data-theme-mode]').forEach(button => button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
       applyTheme(button.dataset.themeMode);
       const labels = { light:'Modo claro ativado.', dark:'Modo escuro ativado.', system:'Tema automático ativado.' };
       toast(labels[button.dataset.themeMode] || 'Tema atualizado.');
@@ -411,6 +417,9 @@
   }
   function effectiveTransactionStatus(t) {
     if (t?.type === 'expense' && t.cardId) {
+      // Permite marcar uma despesa do cartão como paga para o controle pessoal.
+      // A fatura continua responsável por liberar o limite do cartão.
+      if (t.status === 'paid') return 'paid';
       const inv = transactionInvoiceMonth(t);
       return invoicePaid(t.cardId, inv) ? 'paid' : 'pending';
     }
@@ -449,7 +458,12 @@
     document.addEventListener('click', e => {
       if (window.innerWidth <= 760 && els.sidebar.classList.contains('open') && !els.sidebar.contains(e.target) && e.target.id !== 'menuBtn') els.sidebar.classList.remove('open');
     });
-    els.monthFilter.addEventListener('change', () => { ensureRecurringForMonth(selectedMonth(), true); renderAll(); });
+    els.monthFilter.addEventListener('change', () => {
+      // Trocar o mês do filtro deve apenas navegar. A versão anterior gerava
+      // recorrências ao navegar e podia criar lançamentos em anos futuros.
+      if (selectedMonth() === currentMonth()) ensureRecurringForMonth(currentMonth(), true);
+      renderAll();
+    });
   }
   function showView(view) {
     const titles = { dashboard:'Visão geral', transactions:'Lançamentos', recurring:'Fixos e assinaturas', cards:'Cartões e faturas', accounts:'Recursos', settings:'Configurações' };
@@ -625,9 +639,9 @@
       const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.cardId?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(transactionInvoiceMonth(t)))}</div>`:''}`;
       return `<tr><td>${formatDate(t.date)}</td><td><strong>${escapeHtml(t.description)}</strong>${t.purchaseDate&&t.purchaseDate!==t.date?`<div class="installment-note">Compra em ${formatDate(t.purchaseDate)}</div>`:''}</td><td>${escapeHtml(t.category)}</td><td>${payment}</td><td><span class="status ${effectiveTransactionStatus(t)}">${effectiveTransactionStatus(t) === 'paid' ? 'Pago / Recebido' : 'Pendente'}</span></td><td class="right"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong></td><td><div class="row-actions"><button class="mini-btn" data-action="toggle-paid" data-id="${t.id}" title="Alterar status">✓</button><button class="mini-btn" data-action="edit-tx" data-id="${t.id}" title="Editar">✎</button><button class="mini-btn" data-action="delete-tx" data-id="${t.id}" title="Excluir">×</button></div></td></tr>`;
     }).join('');
-    $$('[data-action="edit-tx"]').forEach(b=>b.addEventListener('click',()=>openTransaction(b.dataset.id)));
-    $$('[data-action="delete-tx"]').forEach(b=>b.addEventListener('click',()=>deleteTransaction(b.dataset.id)));
-    $$('[data-action="toggle-paid"]').forEach(b=>b.addEventListener('click',()=>toggleTransactionStatus(b.dataset.id)));
+    $$('[data-action="edit-tx"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openTransaction(b.dataset.id);}));
+    $$('[data-action="delete-tx"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();deleteTransaction(b.dataset.id);}));
+    $$('[data-action="toggle-paid"]').forEach(b=>b.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();toggleTransactionStatus(b.dataset.id);}));
   }
 
   function populateCategorySelects() {
@@ -808,7 +822,7 @@
     }
   }
   function deleteTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm(`Excluir “${t.description}”?`))return;state.transactions=state.transactions.filter(x=>x.id!==id);markDeleted('transactions',id);saveState();renderAll();toast('Lançamento excluído.');}
-  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&t.cardId){toast('Compras no crédito são quitadas pela fatura do cartão.');return;}if(t.type==='expense'&&isBenefitPayment(t.payment)){toast('Gastos com vale são debitados diretamente do saldo do benefício.');return;}t.status=t.status==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
+  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&isBenefitPayment(t.payment)){toast('Gastos com vale são debitados diretamente do saldo do benefício.');return;}const current=effectiveTransactionStatus(t);t.status=current==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
 
   function recurringKindLabel(kind) {
     return ({fixed:'Conta fixa',subscription:'Assinatura',internet:'Chip / internet',income:'Receita recorrente',other:'Recorrente'})[kind] || 'Recorrente';
@@ -900,13 +914,32 @@
 
     // A recorrência e o lançamento automático do mês precisam formar uma única
     // alteração lógica. Monte tudo no estado primeiro e sincronize apenas uma vez.
-    ensureRecurringForMonth(selectedMonth(), true, false, false);
+    // Cadastrar/editar um fixo gera somente a competência atual. O mês apenas
+    // visualizado no filtro não deve criar lançamentos retroativos ou futuros.
+    ensureRecurringForMonth(currentMonth(), true, false, false);
     saveState();
 
     closeDialog(els.recurringModal);renderAll();
     toast(idx>=0?'Fixo/assinatura atualizado.':'Fixo/assinatura cadastrado.');
   }
   function deleteRecurring(id){const r=state.recurring.find(x=>x.id===id);if(!r||!confirm(`Excluir “${r.description}”? Os lançamentos já gerados serão mantidos.`))return;state.recurring=state.recurring.filter(x=>x.id!==id);markDeleted('recurring',id);saveState();renderAll();toast('Recorrência excluída.');}
+  function repairFarFutureRecurringTransactions(persist=true) {
+    // Remove somente recorrências automáticas que a versão anterior criou muito
+    // à frente ao navegar no seletor de mês. Lançamentos manuais não são tocados.
+    const maxMonth = shiftMonth(currentMonth(), 24);
+    const removed = [];
+    state.transactions = state.transactions.filter(t => {
+      const generatedRecurring = Boolean(t?.recurringId) && String(t?.id || '').startsWith('rec-');
+      const future = generatedRecurring && monthIndex(monthOf(t.date)) > monthIndex(maxMonth);
+      if (future) removed.push(t.id);
+      return !future;
+    });
+    if (!removed.length) return 0;
+    removed.forEach(id => markDeleted('transactions', id));
+    if (persist) saveState();
+    return removed.length;
+  }
+
   function ensureRecurringForMonth(month,silent=false,includeManual=false,persist=true){
     if(!month)return 0;
     const [year,mo]=month.split('-').map(Number);
@@ -1221,6 +1254,7 @@
     setCloudStatus('Sincronizando...', 'syncing');
     try {
       await bootstrapCloudState();
+      repairFarFutureRecurringTransactions(true);
       ensureRecurringForMonth(currentMonth(), true);
       setCloudStatus('Sincronizado', 'ok');
       startCloudPolling();
@@ -1456,6 +1490,7 @@
         setCloudDirty(false);
       }
 
+      repairFarFutureRecurringTransactions(true);
       ensureRecurringForMonth(currentMonth(), true);
       renderAll();
       if (!cloudDirty) setCloudStatus('Atualizado da nuvem', 'ok');
