@@ -3,6 +3,7 @@
 
   const STORAGE_KEY = 'meuFinanceiroStateV1';
   const DIRTY_KEY = 'meuFinanceiroCloudDirtyV1';
+  const THEME_KEY = 'meuFinanceiroThemeV1';
   const uid = () => (crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
   const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
@@ -30,6 +31,8 @@
   let lastSyncError = '';
   let cloudPollTimer = null;
   let localRevision = 0;
+  const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  let themeMode = loadThemeMode();
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -54,6 +57,7 @@
     cloudUser: $('#cloudUser'), cloudUserEmail: $('#cloudUserEmail'), cloudAccountText: $('#cloudAccountText')
   };
 
+  applyTheme(themeMode, false, false);
   init();
 
   function init() {
@@ -61,6 +65,7 @@
     bindNavigation();
     bindModals();
     bindActions();
+    bindThemeUi();
     // Quando há Supabase configurado, espere a carga inicial da nuvem antes de
     // gerar recorrências. Isso evita criar/alterar estado local enquanto o
     // bootstrap ainda está trazendo a versão remota.
@@ -204,6 +209,49 @@
     saveLocalState();
     setCloudDirty(true);
     scheduleCloudPush();
+  }
+
+  function loadThemeMode() {
+    try {
+      const stored = localStorage.getItem(THEME_KEY);
+      return ['light','dark','system'].includes(stored) ? stored : 'system';
+    } catch { return 'system'; }
+  }
+  function effectiveTheme(mode = themeMode) {
+    return mode === 'system' ? (systemThemeQuery.matches ? 'dark' : 'light') : mode;
+  }
+  function applyTheme(mode, persist = true, redrawChart = true) {
+    themeMode = ['light','dark','system'].includes(mode) ? mode : 'system';
+    const effective = effectiveTheme(themeMode);
+    document.documentElement.dataset.theme = effective;
+    document.documentElement.dataset.themeMode = themeMode;
+    document.documentElement.style.colorScheme = effective;
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.setAttribute('content', effective === 'dark' ? '#0b1220' : '#f3f5f8');
+    if (persist) {
+      try { localStorage.setItem(THEME_KEY, themeMode); } catch {}
+    }
+    renderThemeControls();
+    if (redrawChart && els.monthFilter?.value && $('#dashboard')?.classList.contains('active')) {
+      requestAnimationFrame(() => drawCategoryChart(dashboardTransactions().filter(t => t.type === 'expense')));
+    }
+  }
+  function renderThemeControls() {
+    $$('[data-theme-mode]').forEach(button => {
+      const active = button.dataset.themeMode === themeMode;
+      button.dataset.active = active ? 'true' : 'false';
+      button.setAttribute('aria-checked', active ? 'true' : 'false');
+    });
+  }
+  function bindThemeUi() {
+    $$('[data-theme-mode]').forEach(button => button.addEventListener('click', () => {
+      applyTheme(button.dataset.themeMode);
+      const labels = { light:'Modo claro ativado.', dark:'Modo escuro ativado.', system:'Tema automático ativado.' };
+      toast(labels[button.dataset.themeMode] || 'Tema atualizado.');
+    }));
+    const onSystemThemeChange = () => { if (themeMode === 'system') applyTheme('system', false); };
+    if (systemThemeQuery.addEventListener) systemThemeQuery.addEventListener('change', onSystemThemeChange);
+    else if (systemThemeQuery.addListener) systemThemeQuery.addListener(onSystemThemeChange);
   }
 
   function currentMonth() {
@@ -453,16 +501,21 @@
     if (!data.length) return;
     const max = Math.max(...data.map(d=>d[1]));
     const left = Math.min(150, cssWidth * .28), right=92, top=16, rowH=38, barH=13;
+    const themeStyles = getComputedStyle(document.documentElement);
+    const chartMuted = themeStyles.getPropertyValue('--muted').trim() || '#64748b';
+    const chartTrack = themeStyles.getPropertyValue('--chart-track').trim() || '#e8edf3';
+    const chartBar = themeStyles.getPropertyValue('--chart-bar').trim() || '#334155';
+    const chartText = themeStyles.getPropertyValue('--text').trim() || '#111827';
     ctx.font='12px system-ui'; ctx.textBaseline='middle';
     data.forEach(([label,value],i)=>{
       const y = top + i*rowH + 15;
-      ctx.fillStyle='#64748b';
+      ctx.fillStyle=chartMuted;
       let shown=label; while(ctx.measureText(shown).width>left-16 && shown.length>4) shown=shown.slice(0,-2); if(shown!==label) shown+='…';
       ctx.fillText(shown,0,y);
       const x=left, w=Math.max(3,(cssWidth-left-right)*(value/max));
-      ctx.fillStyle='#e8edf3'; roundRect(ctx,x,y-barH/2,cssWidth-left-right,barH,7); ctx.fill();
-      ctx.fillStyle='#334155'; roundRect(ctx,x,y-barH/2,w,barH,7); ctx.fill();
-      ctx.fillStyle='#111827'; ctx.textAlign='right'; ctx.font='600 11px system-ui'; ctx.fillText(money.format(value),cssWidth-2,y); ctx.textAlign='left'; ctx.font='12px system-ui';
+      ctx.fillStyle=chartTrack; roundRect(ctx,x,y-barH/2,cssWidth-left-right,barH,7); ctx.fill();
+      ctx.fillStyle=chartBar; roundRect(ctx,x,y-barH/2,w,barH,7); ctx.fill();
+      ctx.fillStyle=chartText; ctx.textAlign='right'; ctx.font='600 11px system-ui'; ctx.fillText(money.format(value),cssWidth-2,y); ctx.textAlign='left'; ctx.font='12px system-ui';
     });
   }
   function roundRect(ctx,x,y,w,h,r){const rr=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+rr,y);ctx.arcTo(x+w,y,x+w,y+h,rr);ctx.arcTo(x+w,y+h,x,y+h,rr);ctx.arcTo(x,y+h,x,y,rr);ctx.arcTo(x,y,x+w,y,rr);ctx.closePath();}
@@ -869,7 +922,7 @@
   function saveAccount(e){e.preventDefault();const balance=parseAmount($('#accountBalance').value);if(!Number.isFinite(balance)){toast('Informe um valor válido.');return;}const id=$('#accountId').value||uid();const item=touchEntity({id,name:$('#accountName').value.trim(),balance});const idx=state.accounts.findIndex(x=>x.id===id);if(idx>=0)state.accounts[idx]=item;else state.accounts.push(item);saveState();closeDialog(els.accountModal);renderAll();toast(idx>=0?'Recurso atualizado.':'Recurso adicionado.');}
   function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a||!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);markDeleted('accounts',id);saveState();renderAll();toast('Recurso excluído.');}
 
-  function renderSettings(){els.categoryTags.innerHTML=state.categories.map(c=>`<span class="tag">${escapeHtml(c)}<button data-cat-delete="${escapeHtml(c)}" title="Excluir">×</button></span>`).join('');$$('[data-cat-delete]').forEach(b=>b.addEventListener('click',()=>deleteCategory(b.dataset.catDelete)));}
+  function renderSettings(){els.categoryTags.innerHTML=state.categories.map(c=>`<span class="tag">${escapeHtml(c)}<button data-cat-delete="${escapeHtml(c)}" title="Excluir">×</button></span>`).join('');$$('[data-cat-delete]').forEach(b=>b.addEventListener('click',()=>deleteCategory(b.dataset.catDelete)));renderThemeControls();}
   function addCategory(e){e.preventDefault();const input=$('#newCategory');const name=input.value.trim();if(!name)return;if(state.categories.some(c=>c.toLowerCase()===name.toLowerCase())){toast('Essa categoria já existe.');return;}state.categories.push(name);state.categories.sort((a,b)=>a.localeCompare(b,'pt-BR'));input.value='';saveState();renderAll();toast('Categoria adicionada.');}
   function deleteCategory(name){if(state.categories.length<=1){toast('Mantenha pelo menos uma categoria.');return;}if(!confirm(`Remover a categoria “${name}”? Lançamentos antigos continuarão com esse nome.`))return;state.categories=state.categories.filter(c=>c!==name);saveState();renderAll();toast('Categoria removida.');}
 
@@ -936,8 +989,8 @@
   function showAuthMessage(message, isError=false) {
     els.authMessage.textContent = message;
     els.authMessage.classList.remove('hidden');
-    els.authMessage.style.background = isError ? '#fff1f0' : '#fff8e1';
-    els.authMessage.style.color = isError ? '#991b1b' : '#854d0e';
+    els.authMessage.style.background = isError ? 'var(--red-bg)' : 'var(--amber-bg)';
+    els.authMessage.style.color = isError ? 'var(--red)' : 'var(--amber)';
   }
   function hideAuthMessage() { els.authMessage.classList.add('hidden'); }
 

@@ -1,4 +1,4 @@
-const CACHE='meu-financeiro-v11-recursosicone';
+const CACHE='meu-financeiro-v12-darkmode';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./supabase-config.js','./manifest.webmanifest','./assets/icon.svg','./assets/icon-192.png','./assets/icon-512.png','./assets/apple-touch-icon.png'];
 
 self.addEventListener('install', event => {
