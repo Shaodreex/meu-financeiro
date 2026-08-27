@@ -86,36 +86,46 @@
       <section id="dashboard" class="view active">
         <div class="hero-grid">
           <article class="card hero-card">
-            <div class="card-head"><span>Saldo disponível</span><span class="pill">posição atual</span></div>
+            <div class="card-head"><span>Saldo disponível</span><span class="pill">planejado</span></div>
             <strong class="hero-value" id="availableBalance">R$ 0,00</strong>
-            <p>Recursos cadastrados na aba “Recursos”.</p>
+            <p>Receitas recebidas menos despesas pendentes do mês selecionado.</p>
           </article>
           <article class="card metric-card">
-            <span>Receitas no mês</span>
+            <span>Receitas recebidas</span>
             <strong id="monthIncome">R$ 0,00</strong>
             <small id="incomeCount">0 recebimentos</small>
           </article>
           <article class="card metric-card">
-            <span>Despesas no mês</span>
+            <span>Despesas planejadas</span>
             <strong id="monthExpense">R$ 0,00</strong>
             <small id="expenseCount">0 pagamentos</small>
           </article>
           <article class="card metric-card warning">
-            <span>Pendente</span>
+            <span>Despesas pendentes</span>
             <strong id="monthPending">R$ 0,00</strong>
             <small id="pendingCount">0 contas</small>
           </article>
         </div>
 
         <div class="content-grid">
-          <article class="card chart-card">
+          <article class="card chart-card expense-dashboard-card">
             <div class="section-title">
-              <div><p class="eyebrow">DISTRIBUIÇÃO</p><h2>Gastos por categoria</h2></div>
-              <strong id="monthBalance" class="balance-chip">Saldo do mês R$ 0,00</strong>
+              <div><p class="eyebrow">PANORAMA DO MÊS</p><h2>Despesas planejadas</h2></div>
+              <strong id="monthBalance" class="balance-chip">Resultado planejado R$ 0,00</strong>
             </div>
-            <div class="chart-wrap">
-              <canvas id="categoryChart" width="760" height="290" aria-label="Gráfico de gastos por categoria"></canvas>
-              <div id="emptyChart" class="empty-chart hidden">Adicione despesas pagas para visualizar o gráfico.</div>
+            <div class="expense-kpi-grid">
+              <div class="expense-kpi"><span>Total do mês</span><strong id="plannedExpenseTotal">R$ 0,00</strong><small>pagas + pendentes</small></div>
+              <div class="expense-kpi"><span>Já pagas</span><strong id="paidExpenseTotal">R$ 0,00</strong><small>saídas realizadas</small></div>
+              <div class="expense-kpi"><span>A pagar</span><strong id="pendingExpenseDash">R$ 0,00</strong><small>compromissos restantes</small></div>
+            </div>
+            <div class="commitment-row">
+              <div><strong>Comprometimento do mês</strong><span id="expenseCommitment">0% da receita</span></div>
+              <div class="commitment-track"><span id="expenseProgressBar"></span></div>
+            </div>
+            <div class="chart-subtitle"><strong>Por categoria</strong><span>Inclui despesas pagas e pendentes.</span></div>
+            <div class="chart-wrap expense-chart-wrap">
+              <canvas id="categoryChart" width="760" height="250" aria-label="Gráfico de despesas planejadas por categoria"></canvas>
+              <div id="emptyChart" class="empty-chart hidden">Adicione despesas para visualizar o panorama do mês.</div>
             </div>
           </article>
 

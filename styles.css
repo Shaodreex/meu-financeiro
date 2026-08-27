@@ -91,3 +91,23 @@ body{min-height:100dvh;overflow-x:hidden;-webkit-tap-highlight-color:transparent
   .invoice-row{grid-template-columns:1fr}
   .invoice-row-value{text-align:left}
 }
+
+/* v2.3 — panorama mensal */
+.expense-dashboard-card{overflow:hidden}
+.expense-kpi-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 15px}
+.expense-kpi{background:#f8fafc;border:1px solid var(--line);border-radius:13px;padding:13px 14px;display:grid;gap:4px}
+.expense-kpi span{font-size:10px;color:var(--muted);font-weight:750;text-transform:uppercase;letter-spacing:.45px}
+.expense-kpi strong{font-size:18px;letter-spacing:-.35px}
+.expense-kpi small{font-size:10px;color:#94a3b8}
+.commitment-row{border:1px solid var(--line);border-radius:13px;padding:12px 14px;margin-bottom:16px;background:#fff}
+.commitment-row>div:first-child{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:9px;font-size:11px}
+.commitment-row>div:first-child span{color:var(--muted);font-weight:700}
+.commitment-track{height:8px;background:#eef2f7;border-radius:999px;overflow:hidden}
+.commitment-track span{display:block;height:100%;width:0;background:#334155;border-radius:inherit;transition:width .25s ease}
+.chart-subtitle{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:4px}
+.chart-subtitle strong{font-size:12px}
+.chart-subtitle span{font-size:10px;color:var(--muted)}
+.expense-chart-wrap{min-height:250px}
+.expense-chart-wrap canvas{height:250px}
+@media(max-width:760px){.expense-kpi-grid{grid-template-columns:1fr 1fr}.expense-kpi:last-child{grid-column:1/-1}.chart-subtitle{align-items:flex-start;flex-direction:column;gap:2px}}
+@media(max-width:440px){.expense-kpi-grid{grid-template-columns:1fr}.expense-kpi:last-child{grid-column:auto}}

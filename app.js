@@ -38,6 +38,8 @@
     sidebar: $('#sidebar'), pageTitle: $('#pageTitle'), monthFilter: $('#monthFilter'),
     availableBalance: $('#availableBalance'), monthIncome: $('#monthIncome'), monthExpense: $('#monthExpense'),
     monthPending: $('#monthPending'), monthBalance: $('#monthBalance'), incomeCount: $('#incomeCount'),
+    plannedExpenseTotal: $('#plannedExpenseTotal'), paidExpenseTotal: $('#paidExpenseTotal'), pendingExpenseDash: $('#pendingExpenseDash'),
+    expenseCommitment: $('#expenseCommitment'), expenseProgressBar: $('#expenseProgressBar'),
     expenseCount: $('#expenseCount'), pendingCount: $('#pendingCount'), pendingList: $('#pendingList'),
     recentTransactions: $('#recentTransactions'), categoryChart: $('#categoryChart'), emptyChart: $('#emptyChart'),
     transactionsTable: $('#transactionsTable'), transactionsEmpty: $('#transactionsEmpty'),
@@ -245,7 +247,8 @@
     return `${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}-${String(Math.min(d,last)).padStart(2,'0')}`;
   }
   function cardById(id) { return state.cards.find(c => c.id === id) || null; }
-  function invoiceMonthFor(card, dateStr) {
+  function invoiceMonthFor(card, dateStr, preferredDueDate = '') {
+    if (preferredDueDate) return monthOf(preferredDueDate);
     if (!card || !dateStr) return monthOf(dateStr);
     const day = Number(dateStr.slice(8,10) || 1);
     const closingDay = Number(card.closingDay || 31);
@@ -254,6 +257,14 @@
     const dueShift = dueDay <= closingDay ? 1 : 0;
     return shiftMonth(monthOf(dateStr), statementShift + dueShift);
   }
+  function transactionInvoiceMonth(t) {
+    if (!t) return '';
+    // Cobranças fixas/assinaturas pertencem à competência em que foram geradas.
+    // Isso mantém uma conta planejada para agosto na fatura de agosto, mesmo
+    // quando a data de geração ocorre após o fechamento técnico do cartão.
+    if (t.cardId && t.recurringId && t.date) return monthOf(t.date);
+    return t.invoiceMonth || monthOf(t.date);
+  }
   function invoiceDueDate(card, invoiceMonth) {
     if (!card || !invoiceMonth) return '';
     const [y,m] = invoiceMonth.split('-').map(Number);
@@ -261,14 +272,14 @@
     return `${invoiceMonth}-${String(Math.min(Number(card.dueDay || 1), last)).padStart(2,'0')}`;
   }
   function invoiceTransactions(cardId, month) {
-    return state.transactions.filter(t => t.type === 'expense' && t.cardId === cardId && (t.invoiceMonth || monthOf(t.date)) === month);
+    return state.transactions.filter(t => t.type === 'expense' && t.cardId === cardId && transactionInvoiceMonth(t) === month);
   }
   function invoicePaid(cardId, month) {
     return state.cardPayments.some(p => p.cardId === cardId && p.month === month && p.paid);
   }
   function effectiveTransactionStatus(t) {
     if (t?.type === 'expense' && t.cardId) {
-      const inv = t.invoiceMonth || monthOf(t.date);
+      const inv = transactionInvoiceMonth(t);
       return invoicePaid(t.cardId, inv) ? 'paid' : 'pending';
     }
     return t?.status || 'pending';
@@ -280,7 +291,7 @@
       // Parcelas futuras comprometem o limite desde a data da compra; cobranças
       // recorrentes futuras só passam a comprometer quando a data chegar.
       .filter(t => (t.purchaseDate || t.date || today) <= today)
-      .filter(t => !invoicePaid(cardId, t.invoiceMonth || monthOf(t.date)))
+      .filter(t => !invoicePaid(cardId, transactionInvoiceMonth(t)))
       .map(t => t.amount));
   }
   function cardAvailableLimit(cardId) {
@@ -369,25 +380,41 @@
   function dashboardTransactions() { return state.transactions.filter(t => monthOf(t.date) === selectedMonth()); }
   function renderDashboard() {
     const tx = dashboardTransactions();
-    const paid = tx.filter(t => effectiveTransactionStatus(t) === 'paid');
-    const income = paid.filter(t => t.type === 'income');
-    const expense = paid.filter(t => t.type === 'expense');
-    const pending = tx.filter(t => effectiveTransactionStatus(t) === 'pending');
-    const incomeTotal = sum(income.map(t=>t.amount));
-    const expenseTotal = sum(expense.map(t=>t.amount));
-    const pendingTotal = sum(pending.map(t=>t.amount));
-    const available = sum(state.accounts.map(a=>a.balance));
+    const incomes = tx.filter(t => t.type === 'income');
+    const receivedIncome = incomes.filter(t => effectiveTransactionStatus(t) === 'paid');
+    const expenses = tx.filter(t => t.type === 'expense');
+    const paidExpenses = expenses.filter(t => effectiveTransactionStatus(t) === 'paid');
+    const pendingExpenses = expenses.filter(t => effectiveTransactionStatus(t) === 'pending');
+
+    const incomeTotal = sum(receivedIncome.map(t=>t.amount));
+    const expenseTotal = sum(expenses.map(t=>t.amount));
+    const paidExpenseTotal = sum(paidExpenses.map(t=>t.amount));
+    const pendingExpenseTotal = sum(pendingExpenses.map(t=>t.amount));
+
+    // Regra solicitada para planejamento do mês:
+    // saldo disponível = receitas efetivamente recebidas - despesas ainda pendentes.
+    const available = incomeTotal - pendingExpenseTotal;
+    const plannedResult = incomeTotal - expenseTotal;
+    const commitment = incomeTotal > 0 ? Math.max(0, (expenseTotal / incomeTotal) * 100) : (expenseTotal > 0 ? 100 : 0);
+
     els.availableBalance.textContent = money.format(available);
     els.monthIncome.textContent = money.format(incomeTotal);
     els.monthExpense.textContent = money.format(expenseTotal);
-    els.monthPending.textContent = money.format(pendingTotal);
-    els.monthBalance.textContent = `Saldo do mês ${money.format(incomeTotal - expenseTotal)}`;
-    els.incomeCount.textContent = `${income.length} ${income.length === 1 ? 'recebimento' : 'recebimentos'}`;
-    els.expenseCount.textContent = `${expense.length} ${expense.length === 1 ? 'pagamento' : 'pagamentos'}`;
-    els.pendingCount.textContent = `${pending.length} ${pending.length === 1 ? 'conta' : 'contas'}`;
-    renderPending(pending);
+    els.monthPending.textContent = money.format(pendingExpenseTotal);
+    els.monthBalance.textContent = `Resultado planejado ${money.format(plannedResult)}`;
+    els.incomeCount.textContent = `${receivedIncome.length} ${receivedIncome.length === 1 ? 'recebimento' : 'recebimentos'}`;
+    els.expenseCount.textContent = `${expenses.length} ${expenses.length === 1 ? 'despesa' : 'despesas'} no mês`;
+    els.pendingCount.textContent = `${pendingExpenses.length} ${pendingExpenses.length === 1 ? 'conta pendente' : 'contas pendentes'}`;
+
+    if (els.plannedExpenseTotal) els.plannedExpenseTotal.textContent = money.format(expenseTotal);
+    if (els.paidExpenseTotal) els.paidExpenseTotal.textContent = money.format(paidExpenseTotal);
+    if (els.pendingExpenseDash) els.pendingExpenseDash.textContent = money.format(pendingExpenseTotal);
+    if (els.expenseCommitment) els.expenseCommitment.textContent = `${commitment.toFixed(0)}% da receita`;
+    if (els.expenseProgressBar) els.expenseProgressBar.style.width = `${Math.min(commitment,100)}%`;
+
+    renderPending(pendingExpenses);
     renderRecent();
-    drawCategoryChart(expense);
+    drawCategoryChart(expenses);
   }
   function sum(values) { return values.reduce((a,b)=>a+Number(b||0),0); }
 
@@ -402,7 +429,7 @@
     els.recentTransactions.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
       const paymentLabel=`${t.payment || 'Outro'}${card?` • ${card.name}`:''}`;
-      return `<div class="transaction-row"><div class="tx-icon ${t.type}">${t.type === 'expense' ? '−' : '+'}</div><div class="tx-main"><strong>${escapeHtml(t.description)}</strong><span>${formatDate(t.date)} • ${escapeHtml(t.category)} • ${effectiveTransactionStatus(t) === 'paid' ? 'Pago/Recebido' : 'Pendente'}${t.invoiceMonth?` • fatura ${monthLabel(t.invoiceMonth)}`:''}</span></div><div class="tx-value"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong><span>${escapeHtml(paymentLabel)}</span></div></div>`;
+      return `<div class="transaction-row"><div class="tx-icon ${t.type}">${t.type === 'expense' ? '−' : '+'}</div><div class="tx-main"><strong>${escapeHtml(t.description)}</strong><span>${formatDate(t.date)} • ${escapeHtml(t.category)} • ${effectiveTransactionStatus(t) === 'paid' ? 'Pago/Recebido' : 'Pendente'}${t.cardId?` • fatura ${monthLabel(transactionInvoiceMonth(t))}`:''}</span></div><div class="tx-value"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong><span>${escapeHtml(paymentLabel)}</span></div></div>`;
     }).join('');
   }
 
@@ -413,7 +440,7 @@
     const canvas = els.categoryChart;
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
-    const cssWidth = canvas.clientWidth || 760, cssHeight = 290;
+    const cssWidth = canvas.clientWidth || 760, cssHeight = canvas.clientHeight || 290;
     canvas.width = Math.floor(cssWidth*dpr); canvas.height = Math.floor(cssHeight*dpr); ctx.scale(dpr,dpr);
     ctx.clearRect(0,0,cssWidth,cssHeight);
     els.emptyChart.classList.toggle('hidden', data.length > 0);
@@ -447,7 +474,7 @@
     els.transactionsEmpty.classList.toggle('hidden', list.length > 0);
     els.transactionsTable.innerHTML = list.map(t => {
       const card=cardById(t.cardId);
-      const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.invoiceMonth?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(t.invoiceMonth))}</div>`:''}`;
+      const payment=`${t.payment || '—'}${card?` • ${card.name}`:''}${t.cardId?`<div class="installment-note">Fatura ${escapeHtml(monthLabel(transactionInvoiceMonth(t)))}</div>`:''}`;
       return `<tr><td>${formatDate(t.date)}</td><td><strong>${escapeHtml(t.description)}</strong>${t.purchaseDate&&t.purchaseDate!==t.date?`<div class="installment-note">Compra em ${formatDate(t.purchaseDate)}</div>`:''}</td><td>${escapeHtml(t.category)}</td><td>${payment}</td><td><span class="status ${effectiveTransactionStatus(t)}">${effectiveTransactionStatus(t) === 'paid' ? 'Pago / Recebido' : 'Pendente'}</span></td><td class="right"><strong>${t.type === 'expense' ? '− ' : '+ '}${money.format(t.amount)}</strong></td><td><div class="row-actions"><button class="mini-btn" data-action="toggle-paid" data-id="${t.id}" title="Alterar status">✓</button><button class="mini-btn" data-action="edit-tx" data-id="${t.id}" title="Editar">✎</button><button class="mini-btn" data-action="delete-tx" data-id="${t.id}" title="Excluir">×</button></div></td></tr>`;
     }).join('');
     $$('[data-action="edit-tx"]').forEach(b=>b.addEventListener('click',()=>openTransaction(b.dataset.id)));
@@ -526,14 +553,15 @@
     if (payment==='Crédito' && type==='expense' && !card) { toast('Cadastre e selecione um cartão para compras no crédito.'); return; }
 
     const baseDescription=$('#txDescription').value.trim();
-    const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:$('#txStatus').value,payment,dueDate:$('#txDueDate').value,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
+    const requestedDueDate=$('#txDueDate').value;
+    const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:$('#txStatus').value,payment,dueDate:requestedDueDate,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
 
     if (existing) {
       const updated=touchEntity({...existing,...base,cardId});
       if (payment==='Crédito' && type==='expense') {
         updated.purchaseDate=existing.purchaseDate || date;
-        updated.invoiceMonth=existing.installmentTotal>1 ? existing.invoiceMonth : invoiceMonthFor(card,date);
-        updated.dueDate=invoiceDueDate(card,updated.invoiceMonth);
+        updated.invoiceMonth=existing.installmentTotal>1 ? existing.invoiceMonth : invoiceMonthFor(card,date,requestedDueDate);
+        updated.dueDate=requestedDueDate || invoiceDueDate(card,updated.invoiceMonth);
       } else {
         updated.cardId=null; updated.invoiceMonth=null; updated.purchaseDate=null;
       }
@@ -548,7 +576,7 @@
     if (installments > 1) {
       const pieces=splitAmount(amount,installments);
       const groupId=uid();
-      const firstInvoice=invoiceMonthFor(card,date);
+      const firstInvoice=invoiceMonthFor(card,date,requestedDueDate);
       pieces.forEach((piece,i)=>{
         const installmentDate=addMonthsToDate(date,i);
         const invoiceMonth=shiftMonth(firstInvoice,i);
@@ -562,7 +590,7 @@
           status:'pending',
           cardId,
           invoiceMonth,
-          dueDate:invoiceDueDate(card,invoiceMonth),
+          dueDate:requestedDueDate ? addMonthsToDate(requestedDueDate,i) : invoiceDueDate(card,invoiceMonth),
           installmentGroupId:groupId,
           installmentNumber:i+1,
           installmentTotal:installments
@@ -576,8 +604,8 @@
     if (payment==='Crédito' && type==='expense') {
       tx.cardId=cardId;
       tx.purchaseDate=date;
-      tx.invoiceMonth=invoiceMonthFor(card,date);
-      tx.dueDate=invoiceDueDate(card,tx.invoiceMonth);
+      tx.invoiceMonth=invoiceMonthFor(card,date,requestedDueDate);
+      tx.dueDate=requestedDueDate || invoiceDueDate(card,tx.invoiceMonth);
       tx.status='pending';
     }
     state.transactions.push(tx);
@@ -696,7 +724,7 @@
       const card=r.payment==='Crédito'?cardById(r.cardId):null;
       let invoiceMonth=null, dueDate=baseDate, status='pending';
       if(card && r.type==='expense'){
-        invoiceMonth=invoiceMonthFor(card,baseDate);
+        invoiceMonth=month;
         dueDate=invoiceDueDate(card,invoiceMonth);
       }
       state.transactions.push(touchEntity({
@@ -839,7 +867,7 @@
   function addCategory(e){e.preventDefault();const input=$('#newCategory');const name=input.value.trim();if(!name)return;if(state.categories.some(c=>c.toLowerCase()===name.toLowerCase())){toast('Essa categoria já existe.');return;}state.categories.push(name);state.categories.sort((a,b)=>a.localeCompare(b,'pt-BR'));input.value='';saveState();renderAll();toast('Categoria adicionada.');}
   function deleteCategory(name){if(state.categories.length<=1){toast('Mantenha pelo menos uma categoria.');return;}if(!confirm(`Remover a categoria “${name}”? Lançamentos antigos continuarão com esse nome.`))return;state.categories=state.categories.filter(c=>c!==name);saveState();renderAll();toast('Categoria removida.');}
 
-  function exportCsv(){const list=filteredTransactions();const rows=[['Data','Tipo','Categoria','Descrição','Valor','Status','Forma de pagamento','Cartão','Fatura','Parcela','Vencimento','Observação'],...list.map(t=>[t.date,t.type==='expense'?'Despesa':'Receita',t.category,t.description,t.amount.toFixed(2).replace('.',','),effectiveTransactionStatus(t)==='paid'?'Pago/Recebido':'Pendente',t.payment,cardById(t.cardId)?.name||'',t.invoiceMonth||'',t.installmentTotal>1?`${t.installmentNumber}/${t.installmentTotal}`:'',t.dueDate||'',t.notes||''])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`lancamentos-${selectedMonth()}.csv`);toast('CSV exportado.');}
+  function exportCsv(){const list=filteredTransactions();const rows=[['Data','Tipo','Categoria','Descrição','Valor','Status','Forma de pagamento','Cartão','Fatura','Parcela','Vencimento','Observação'],...list.map(t=>[t.date,t.type==='expense'?'Despesa':'Receita',t.category,t.description,t.amount.toFixed(2).replace('.',','),effectiveTransactionStatus(t)==='paid'?'Pago/Recebido':'Pendente',t.payment,cardById(t.cardId)?.name||'',t.cardId?transactionInvoiceMonth(t):'',t.installmentTotal>1?`${t.installmentNumber}/${t.installmentTotal}`:'',t.dueDate||'',t.notes||''])];const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')).join('\r\n');downloadBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),`lancamentos-${selectedMonth()}.csv`);toast('CSV exportado.');}
   function downloadBackup(){const payload={app:'Meu Financeiro',exportedAt:new Date().toISOString(),state};downloadBlob(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),`meu-financeiro-backup-${new Date().toISOString().slice(0,10)}.json`);toast('Backup baixado.');}
   function restoreBackup(e){
     const file=e.target.files?.[0];if(!file)return;const reader=new FileReader();
