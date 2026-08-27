@@ -58,7 +58,7 @@
         <button class="nav-item active" data-view="dashboard"><span>⌂</span> Visão geral</button>
         <button class="nav-item" data-view="transactions"><span>↕</span> Lançamentos</button>
         <button class="nav-item" data-view="recurring"><span>↻</span> Fixos e assinaturas</button>
-        <button class="nav-item" data-view="cards"><span>▣</span> Cartões e faturas</button>
+        <button class="nav-item" data-view="cards"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 10h18M7 15h4"></path></svg></span> Cartões e faturas</button>
         <button class="nav-item" data-view="accounts"><span>◫</span> Recursos</button>
         <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
       </nav>
@@ -88,12 +88,12 @@
           <article class="card hero-card">
             <div class="card-head"><span>Saldo disponível</span><span class="pill">planejado</span></div>
             <strong class="hero-value" id="availableBalance">R$ 0,00</strong>
-            <p>Receitas recebidas menos despesas pendentes do mês selecionado.</p>
+            <p>Recursos disponíveis menos despesas pendentes do mês selecionado.</p>
           </article>
           <article class="card metric-card">
-            <span>Receitas recebidas</span>
+            <span>Recursos disponíveis</span>
             <strong id="monthIncome">R$ 0,00</strong>
-            <small id="incomeCount">0 recebimentos</small>
+            <small id="incomeCount">0 recursos cadastrados</small>
           </article>
           <article class="card metric-card">
             <span>Despesas planejadas</span>
@@ -119,7 +119,7 @@
               <div class="expense-kpi"><span>A pagar</span><strong id="pendingExpenseDash">R$ 0,00</strong><small>compromissos restantes</small></div>
             </div>
             <div class="commitment-row">
-              <div><strong>Comprometimento do mês</strong><span id="expenseCommitment">0% da receita</span></div>
+              <div><strong>Comprometimento das pendências</strong><span id="expenseCommitment">0% dos recursos</span></div>
               <div class="commitment-track"><span id="expenseProgressBar"></span></div>
             </div>
             <div class="chart-subtitle"><strong>Por categoria</strong><span>Inclui despesas pagas e pendentes.</span></div>

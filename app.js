@@ -390,26 +390,32 @@
     const expenseTotal = sum(expenses.map(t=>t.amount));
     const paidExpenseTotal = sum(paidExpenses.map(t=>t.amount));
     const pendingExpenseTotal = sum(pendingExpenses.map(t=>t.amount));
+    const resourcesTotal = sum(state.accounts.map(a => a.balance));
 
-    // Regra solicitada para planejamento do mês:
-    // saldo disponível = receitas efetivamente recebidas - despesas ainda pendentes.
-    const available = incomeTotal - pendingExpenseTotal;
-    const plannedResult = incomeTotal - expenseTotal;
-    const commitment = incomeTotal > 0 ? Math.max(0, (expenseTotal / incomeTotal) * 100) : (expenseTotal > 0 ? 100 : 0);
+    // Planejamento financeiro baseado na posição real informada em Recursos.
+    // O saldo disponível representa quanto ainda pode ser comprometido:
+    // recursos atuais - despesas que ainda estão pendentes no mês selecionado.
+    // Despesas já pagas não são subtraídas novamente, pois a posição de Recursos
+    // deve refletir o saldo atual informado pelo usuário.
+    const available = resourcesTotal - pendingExpenseTotal;
+    const plannedResult = available;
+    const commitment = resourcesTotal > 0
+      ? Math.max(0, (pendingExpenseTotal / resourcesTotal) * 100)
+      : (pendingExpenseTotal > 0 ? 100 : 0);
 
     els.availableBalance.textContent = money.format(available);
-    els.monthIncome.textContent = money.format(incomeTotal);
+    els.monthIncome.textContent = money.format(resourcesTotal);
     els.monthExpense.textContent = money.format(expenseTotal);
     els.monthPending.textContent = money.format(pendingExpenseTotal);
-    els.monthBalance.textContent = `Resultado planejado ${money.format(plannedResult)}`;
-    els.incomeCount.textContent = `${receivedIncome.length} ${receivedIncome.length === 1 ? 'recebimento' : 'recebimentos'}`;
+    els.monthBalance.textContent = `Saldo após pendências ${money.format(plannedResult)}`;
+    els.incomeCount.textContent = `${state.accounts.length} ${state.accounts.length === 1 ? 'recurso cadastrado' : 'recursos cadastrados'}`;
     els.expenseCount.textContent = `${expenses.length} ${expenses.length === 1 ? 'despesa' : 'despesas'} no mês`;
     els.pendingCount.textContent = `${pendingExpenses.length} ${pendingExpenses.length === 1 ? 'conta pendente' : 'contas pendentes'}`;
 
     if (els.plannedExpenseTotal) els.plannedExpenseTotal.textContent = money.format(expenseTotal);
     if (els.paidExpenseTotal) els.paidExpenseTotal.textContent = money.format(paidExpenseTotal);
     if (els.pendingExpenseDash) els.pendingExpenseDash.textContent = money.format(pendingExpenseTotal);
-    if (els.expenseCommitment) els.expenseCommitment.textContent = `${commitment.toFixed(0)}% da receita`;
+    if (els.expenseCommitment) els.expenseCommitment.textContent = `${commitment.toFixed(0)}% dos recursos`;
     if (els.expenseProgressBar) els.expenseProgressBar.style.width = `${Math.min(commitment,100)}%`;
 
     renderPending(pendingExpenses);
