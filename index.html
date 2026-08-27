@@ -18,7 +18,7 @@
 <body>
   <div id="authGate" class="auth-gate hidden" aria-live="polite">
     <div class="auth-card">
-      <div class="auth-brand"><div class="brand-mark brand-mark-shaodree" aria-label="Shaodree"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path class="brand-s" d="M34 14.5c-2.3-3.1-5.7-4.7-10-4.7-6.1 0-10.4 3-10.4 7.4 0 4.1 3.3 5.9 10.4 7.2 7 1.3 10.4 3.2 10.4 7.1 0 4.4-4.4 7.2-10.8 7.2-4.7 0-8.5-1.7-11-5"/><path class="brand-bars" d="M31.5 34.5v-4M36 34.5v-7M40.5 34.5v-10"/></svg></div><div><strong>Meu Financeiro</strong><span>sincronização segura</span></div></div>
+      <div class="auth-brand"><div class="brand-mark brand-mark-shaodree" aria-label="Shaodree"><span class="brand-letter" aria-hidden="true">S</span></div><div><strong>Meu Financeiro</strong><span>sincronização segura</span></div></div>
       <div id="authLoginPanel">
         <p class="eyebrow">ENTRAR</p><h1>Acesse suas finanças</h1>
         <p class="muted">Use a mesma conta no iPhone e no computador para manter tudo sincronizado.</p>
@@ -47,7 +47,7 @@
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <div class="brand-mark brand-mark-shaodree" aria-label="Shaodree"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path class="brand-s" d="M34 14.5c-2.3-3.1-5.7-4.7-10-4.7-6.1 0-10.4 3-10.4 7.4 0 4.1 3.3 5.9 10.4 7.2 7 1.3 10.4 3.2 10.4 7.1 0 4.4-4.4 7.2-10.8 7.2-4.7 0-8.5-1.7-11-5"/><path class="brand-bars" d="M31.5 34.5v-4M36 34.5v-7M40.5 34.5v-10"/></svg></div>
+        <div class="brand-mark brand-mark-shaodree" aria-label="Shaodree"><span class="brand-letter" aria-hidden="true">S</span></div>
         <div>
           <strong>Meu Financeiro</strong>
           <span>controle pessoal</span>
@@ -205,6 +205,10 @@
           <button class="btn btn-primary" id="addAccountBtn">＋ Novo recurso</button>
         </div>
         <div class="account-summary card"><span>Total disponível</span><strong id="accountsTotal">R$ 0,00</strong></div>
+        <div class="benefit-summary-grid">
+          <article class="card mini-summary benefit-summary"><span>Vale Alimentação no mês</span><strong id="foodVoucherSpent">R$ 0,00</strong><small id="foodVoucherCount">0 gastos registrados</small></article>
+          <article class="card mini-summary benefit-summary"><span>Vale Combustível no mês</span><strong id="fuelVoucherSpent">R$ 0,00</strong><small id="fuelVoucherCount">0 gastos registrados</small></article>
+        </div>
         <div id="accountsGrid" class="cards-grid"></div>
       </section>
 
@@ -256,12 +260,12 @@
         <label class="field"><span>Valor</span><input id="txAmount" inputmode="decimal" placeholder="0,00" required /></label>
         <label class="field full"><span>Descrição</span><input id="txDescription" maxlength="80" placeholder="Ex.: Mercado, salário, combustível" required /></label>
         <label class="field"><span>Categoria</span><select id="txCategory" required></select></label>
-        <label class="field"><span>Forma de pagamento</span><select id="txPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field"><span>Forma de pagamento</span><select id="txPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Vale Alimentação</option><option>Vale Combustível</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
         <label class="field hidden" id="txCardField"><span>Cartão</span><select id="txCard"></select></label>
         <label class="field hidden" id="txInstallmentsField"><span>Parcelamento</span><select id="txInstallments"><option value="1">À vista</option><option value="2">2x</option><option value="3">3x</option><option value="4">4x</option><option value="5">5x</option><option value="6">6x</option><option value="7">7x</option><option value="8">8x</option><option value="9">9x</option><option value="10">10x</option><option value="11">11x</option><option value="12">12x</option><option value="18">18x</option><option value="24">24x</option></select></label>
         <label class="field"><span>Status</span><select id="txStatus"><option value="paid">Pago / Recebido</option><option value="pending">Pendente</option></select></label>
         <label class="field"><span>Vencimento</span><input id="txDueDate" type="date" /></label>
-        <div id="txCreditHint" class="form-hint full hidden">Compras no crédito entram na fatura do cartão. Em compras parceladas, o valor informado é o total da compra.</div>
+        <div id="txCreditHint" class="form-hint full hidden">Ao selecionar o cartão, o vencimento é preenchido automaticamente pela próxima fatura. Você pode ajustar manualmente se necessário. Em compras parceladas, o valor informado é o total da compra.</div>
         <label class="field full"><span>Observação</span><textarea id="txNotes" rows="2" maxlength="180" placeholder="Opcional"></textarea></label>
       </div>
       <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal">Cancelar</button><button type="submit" class="btn btn-primary">Salvar lançamento</button></div>
@@ -280,7 +284,7 @@
         <label class="field full"><span>Descrição</span><input id="recDescription" required maxlength="80" placeholder="Ex.: Netflix, Vivo chip, internet, aluguel" /></label>
         <label class="field"><span>Empresa / fornecedor</span><input id="recProvider" maxlength="60" placeholder="Opcional" /></label>
         <label class="field"><span>Categoria</span><select id="recCategory" required></select></label>
-        <label class="field"><span>Forma</span><select id="recPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
+        <label class="field"><span>Forma</span><select id="recPayment"><option>Pix</option><option>Débito</option><option>Crédito</option><option>Vale Alimentação</option><option>Vale Combustível</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option></select></label>
         <label class="field hidden" id="recCardField"><span>Cartão</span><select id="recCard"></select></label>
         <label class="field checkbox-field"><input id="recActive" type="checkbox" checked /><span>Recorrência ativa</span></label>
         <label class="field checkbox-field"><input id="recAutoGenerate" type="checkbox" checked /><span>Gerar automaticamente todo mês</span></label>

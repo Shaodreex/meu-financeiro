@@ -49,7 +49,7 @@
     transactionSearch: $('#transactionSearch'), typeFilter: $('#typeFilter'), statusFilter: $('#statusFilter'),
     recurringGrid: $('#recurringGrid'), recurringEmpty: $('#recurringEmpty'),
     cardsGrid: $('#cardsGrid'), cardsEmpty: $('#cardsEmpty'), invoiceList: $('#invoiceList'),
-    accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'), categoryTags: $('#categoryTags'),
+    accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'), foodVoucherSpent: $('#foodVoucherSpent'), foodVoucherCount: $('#foodVoucherCount'), fuelVoucherSpent: $('#fuelVoucherSpent'), fuelVoucherCount: $('#fuelVoucherCount'), categoryTags: $('#categoryTags'),
     transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), cardModal: $('#cardModal'), accountModal: $('#accountModal'),
     iosInstallModal: $('#iosInstallModal'),
     modalBackdrop: $('#modalBackdrop'), toast: $('#toast'),
@@ -400,6 +400,10 @@
     $('#cardForm').addEventListener('submit', saveCard);
     $('#accountForm').addEventListener('submit', saveAccount);
     $('#txPayment').addEventListener('change', updateTransactionCreditFields);
+    $('#txCard').addEventListener('change', () => updateTransactionCreditDueDate(true));
+    $('#txDate').addEventListener('change', () => updateTransactionCreditDueDate(true));
+    $('#txDueDate').addEventListener('input', () => { delete $('#txDueDate').dataset.creditAuto; });
+    $$('input[name="txType"]').forEach(node => node.addEventListener('change', updateTransactionCreditFields));
     $('#recPayment').addEventListener('change', updateRecurringCreditFields);
     $('#recKind').addEventListener('change', () => {
       if ($('#recKind').value === 'income') $('#recType').value = 'income';
@@ -560,14 +564,37 @@
       if (active.some(c => c.id === current)) node.value = current;
     });
   }
+  function transactionIsCreditExpense() {
+    return $('#txPayment').value === 'Crédito' && $('input[name="txType"]:checked')?.value === 'expense';
+  }
+  function updateTransactionCreditDueDate(force = false) {
+    if (!transactionIsCreditExpense()) return;
+    const card = cardById($('#txCard').value);
+    const date = $('#txDate').value;
+    const dueNode = $('#txDueDate');
+    if (!card || !date || !dueNode) return;
+    // Ao apenas abrir um lançamento existente, preserve um vencimento que já
+    // estava salvo. Trocar cartão/data força um novo cálculo automático.
+    if (!force && $('#transactionId').value && dueNode.value) return;
+    const invoiceMonth = invoiceMonthFor(card, date, '');
+    dueNode.value = invoiceDueDate(card, invoiceMonth);
+    dueNode.dataset.creditAuto = '1';
+  }
   function updateTransactionCreditFields() {
-    const credit = $('#txPayment').value === 'Crédito';
+    const credit = transactionIsCreditExpense();
+    const dueNode = $('#txDueDate');
     $('#txCardField').classList.toggle('hidden', !credit);
     $('#txInstallmentsField').classList.toggle('hidden', !credit || Boolean($('#transactionId').value));
     $('#txCreditHint').classList.toggle('hidden', !credit);
     if (credit) {
       if (!$('#transactionId').value) $('#txStatus').value = 'pending';
       populateCardSelects();
+      updateTransactionCreditDueDate(false);
+    } else if (dueNode?.dataset.creditAuto === '1') {
+      // Se o vencimento foi criado pelo cartão e a forma de pagamento mudou,
+      // remova apenas o valor automático. Datas informadas manualmente permanecem.
+      dueNode.value = '';
+      delete dueNode.dataset.creditAuto;
     }
   }
   function openTransaction(id=null) {
@@ -575,6 +602,7 @@
     populateCardSelects();
     $('#transactionForm').reset();
     $('#transactionId').value='';
+    delete $('#txDueDate').dataset.creditAuto;
     $('#txDate').value = new Date().toISOString().slice(0,10);
     $('#txStatus').value='paid';
     $('#txInstallments').value='1';
@@ -917,7 +945,25 @@
   }
 
 
-  function renderAccounts(){const total=sum(state.accounts.map(a=>a.balance));els.accountsTotal.textContent=money.format(total);els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Atualize quando necessário</span><span>posição manual</span></div></article>`).join('');$$('[data-acc-edit]').forEach(b=>b.addEventListener('click',()=>openAccount(b.dataset.accEdit)));$$('[data-acc-delete]').forEach(b=>b.addEventListener('click',()=>deleteAccount(b.dataset.accDelete)));}
+  function renderAccounts(){
+    const total=sum(state.accounts.map(a=>a.balance));
+    els.accountsTotal.textContent=money.format(total);
+
+    const month=selectedMonth();
+    const monthExpenses=state.transactions.filter(t=>t.type==='expense' && monthOf(t.date)===month);
+    const foodVoucher=monthExpenses.filter(t=>t.payment==='Vale Alimentação');
+    const fuelVoucher=monthExpenses.filter(t=>t.payment==='Vale Combustível');
+    const foodTotal=sum(foodVoucher.map(t=>t.amount));
+    const fuelTotal=sum(fuelVoucher.map(t=>t.amount));
+    if(els.foodVoucherSpent) els.foodVoucherSpent.textContent=money.format(foodTotal);
+    if(els.fuelVoucherSpent) els.fuelVoucherSpent.textContent=money.format(fuelTotal);
+    if(els.foodVoucherCount) els.foodVoucherCount.textContent=`${foodVoucher.length} ${foodVoucher.length===1?'gasto registrado':'gastos registrados'}`;
+    if(els.fuelVoucherCount) els.fuelVoucherCount.textContent=`${fuelVoucher.length} ${fuelVoucher.length===1?'gasto registrado':'gastos registrados'}`;
+
+    els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Atualize quando necessário</span><span>posição manual</span></div></article>`).join('');
+    $$('[data-acc-edit]').forEach(b=>b.addEventListener('click',()=>openAccount(b.dataset.accEdit)));
+    $$('[data-acc-delete]').forEach(b=>b.addEventListener('click',()=>deleteAccount(b.dataset.accDelete)));
+  }
   function openAccount(id=null){$('#accountForm').reset();$('#accountId').value='';$('#accountModalTitle').textContent=id?'Editar recurso':'Novo recurso';if(id){const a=state.accounts.find(x=>x.id===id);if(!a)return;$('#accountId').value=a.id;$('#accountName').value=a.name;$('#accountBalance').value=formatInputAmount(a.balance);}showDialog(els.accountModal);}
   function saveAccount(e){e.preventDefault();const balance=parseAmount($('#accountBalance').value);if(!Number.isFinite(balance)){toast('Informe um valor válido.');return;}const id=$('#accountId').value||uid();const item=touchEntity({id,name:$('#accountName').value.trim(),balance});const idx=state.accounts.findIndex(x=>x.id===id);if(idx>=0)state.accounts[idx]=item;else state.accounts.push(item);saveState();closeDialog(els.accountModal);renderAll();toast(idx>=0?'Recurso atualizado.':'Recurso adicionado.');}
   function deleteAccount(id){const a=state.accounts.find(x=>x.id===id);if(!a||!confirm(`Excluir o recurso “${a.name}”?`))return;state.accounts=state.accounts.filter(x=>x.id!==id);markDeleted('accounts',id);saveState();renderAll();toast('Recurso excluído.');}
