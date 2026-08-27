@@ -201,13 +201,23 @@
 
       <section id="accounts" class="view">
         <div class="page-actions">
-          <div><p>Mantenha aqui sua posição financeira atual. Esses valores alimentam o “Saldo disponível”.</p></div>
+          <div><p>Mantenha aqui sua posição financeira atual e acompanhe os saldos dos benefícios separadamente. Apenas os recursos em dinheiro alimentam o “Saldo disponível”.</p></div>
           <button class="btn btn-primary" id="addAccountBtn">＋ Novo recurso</button>
         </div>
-        <div class="account-summary card"><span>Total disponível</span><strong id="accountsTotal">R$ 0,00</strong></div>
+        <div class="account-summary card"><span>Total disponível em dinheiro</span><strong id="accountsTotal">R$ 0,00</strong></div>
         <div class="benefit-summary-grid">
-          <article class="card mini-summary benefit-summary"><span>Vale Alimentação no mês</span><strong id="foodVoucherSpent">R$ 0,00</strong><small id="foodVoucherCount">0 gastos registrados</small></article>
-          <article class="card mini-summary benefit-summary"><span>Vale Combustível no mês</span><strong id="fuelVoucherSpent">R$ 0,00</strong><small id="fuelVoucherCount">0 gastos registrados</small></article>
+          <article class="card benefit-wallet">
+            <div class="benefit-wallet-head"><div><span class="benefit-label">Vale Alimentação</span><small>saldo separado do dinheiro</small></div><span class="benefit-chip">VA</span></div>
+            <strong class="benefit-balance" id="foodVoucherBalance">R$ 3,02</strong>
+            <div class="benefit-wallet-meta"><span>Crédito mensal <strong id="foodVoucherMonthly">R$ 1.086,40</strong></span><span id="foodVoucherNext">próximo crédito em setembro</span></div>
+            <div class="benefit-wallet-foot"><span>Gasto no mês: <strong id="foodVoucherSpent">R$ 0,00</strong></span><small id="foodVoucherCount">0 gastos registrados</small></div>
+          </article>
+          <article class="card benefit-wallet">
+            <div class="benefit-wallet-head"><div><span class="benefit-label">Vale Combustível</span><small>saldo separado do dinheiro</small></div><span class="benefit-chip">VC</span></div>
+            <strong class="benefit-balance" id="fuelVoucherBalance">R$ 8,88</strong>
+            <div class="benefit-wallet-meta"><span>Crédito mensal <strong id="fuelVoucherMonthly">R$ 300,00</strong></span><span id="fuelVoucherNext">próximo crédito em setembro</span></div>
+            <div class="benefit-wallet-foot"><span>Gasto no mês: <strong id="fuelVoucherSpent">R$ 0,00</strong></span><small id="fuelVoucherCount">0 gastos registrados</small></div>
+          </article>
         </div>
         <div id="accountsGrid" class="cards-grid"></div>
       </section>
@@ -266,6 +276,7 @@
         <label class="field"><span>Status</span><select id="txStatus"><option value="paid">Pago / Recebido</option><option value="pending">Pendente</option></select></label>
         <label class="field"><span>Vencimento</span><input id="txDueDate" type="date" /></label>
         <div id="txCreditHint" class="form-hint full hidden">Ao selecionar o cartão, o vencimento é preenchido automaticamente pela próxima fatura. Você pode ajustar manualmente se necessário. Em compras parceladas, o valor informado é o total da compra.</div>
+        <div id="txBenefitHint" class="form-hint full hidden">Este gasto será debitado diretamente do saldo do benefício e não reduzirá o saldo disponível em dinheiro.</div>
         <label class="field full"><span>Observação</span><textarea id="txNotes" rows="2" maxlength="180" placeholder="Opcional"></textarea></label>
       </div>
       <div class="modal-actions"><button type="button" class="btn btn-secondary close-modal">Cancelar</button><button type="submit" class="btn btn-primary">Salvar lançamento</button></div>

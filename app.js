@@ -8,6 +8,11 @@
   const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
   const shortDate = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 
+  const DEFAULT_BENEFITS = {
+    food: { id: 'food', label: 'Vale Alimentação', payment: 'Vale Alimentação', monthlyCredit: 1086.40, baseBalance: 3.02, baseMonth: '2026-08', nextCreditMonth: '2026-09', creditDay: 1, _updatedAt: 0 },
+    fuel: { id: 'fuel', label: 'Vale Combustível', payment: 'Vale Combustível', monthlyCredit: 300.00, baseBalance: 8.88, baseMonth: '2026-08', nextCreditMonth: '2026-09', creditDay: 1, _updatedAt: 0 }
+  };
+
   const DEFAULT_STATE = {
     version: 1,
     categories: ['Moradia','Alimentação','Transporte','Saúde','Educação','Lazer','Assinaturas','Compras','Impostos e taxas','Dívidas','Investimentos','Outros'],
@@ -16,6 +21,10 @@
     recurring: [],
     cards: [],
     cardPayments: [],
+    benefits: {
+      food: { ...DEFAULT_BENEFITS.food },
+      fuel: { ...DEFAULT_BENEFITS.fuel }
+    },
     syncMeta: { tombstones: { accounts: [], transactions: [], recurring: [], cards: [], cardPayments: [] } }
   };
 
@@ -49,7 +58,10 @@
     transactionSearch: $('#transactionSearch'), typeFilter: $('#typeFilter'), statusFilter: $('#statusFilter'),
     recurringGrid: $('#recurringGrid'), recurringEmpty: $('#recurringEmpty'),
     cardsGrid: $('#cardsGrid'), cardsEmpty: $('#cardsEmpty'), invoiceList: $('#invoiceList'),
-    accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'), foodVoucherSpent: $('#foodVoucherSpent'), foodVoucherCount: $('#foodVoucherCount'), fuelVoucherSpent: $('#fuelVoucherSpent'), fuelVoucherCount: $('#fuelVoucherCount'), categoryTags: $('#categoryTags'),
+    accountsGrid: $('#accountsGrid'), accountsTotal: $('#accountsTotal'),
+    foodVoucherBalance: $('#foodVoucherBalance'), foodVoucherMonthly: $('#foodVoucherMonthly'), foodVoucherSpent: $('#foodVoucherSpent'), foodVoucherCount: $('#foodVoucherCount'), foodVoucherNext: $('#foodVoucherNext'),
+    fuelVoucherBalance: $('#fuelVoucherBalance'), fuelVoucherMonthly: $('#fuelVoucherMonthly'), fuelVoucherSpent: $('#fuelVoucherSpent'), fuelVoucherCount: $('#fuelVoucherCount'), fuelVoucherNext: $('#fuelVoucherNext'),
+    categoryTags: $('#categoryTags'),
     transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), cardModal: $('#cardModal'), accountModal: $('#accountModal'),
     iosInstallModal: $('#iosInstallModal'),
     modalBackdrop: $('#modalBackdrop'), toast: $('#toast'),
@@ -113,6 +125,25 @@
       id: p.id || `${p.cardId}:${p.month}`,
       paid: Boolean(p.paid)
     })) : [];
+    const benefitSource = base.benefits || {};
+    const normalizedBenefits = {};
+    ['food','fuel'].forEach(key => {
+      const def = DEFAULT_BENEFITS[key];
+      const src = benefitSource[key] || {};
+      normalizedBenefits[key] = {
+        ...def,
+        ...src,
+        id: key,
+        label: def.label,
+        payment: def.payment,
+        monthlyCredit: Number(src.monthlyCredit ?? def.monthlyCredit),
+        baseBalance: Number(src.baseBalance ?? def.baseBalance),
+        baseMonth: src.baseMonth || def.baseMonth,
+        nextCreditMonth: src.nextCreditMonth || def.nextCreditMonth,
+        creditDay: Math.min(28, Math.max(1, Number(src.creditDay || def.creditDay || 1))),
+        _updatedAt: Number(src._updatedAt || 0)
+      };
+    });
     return {
       version: 1,
       categories: Array.isArray(base.categories) && base.categories.length ? base.categories : clone(DEFAULT_STATE.categories),
@@ -121,6 +152,7 @@
       recurring: normalizedRecurring,
       cards: Array.isArray(base.cards) ? base.cards.map(withMeta) : [],
       cardPayments: normalizedPayments,
+      benefits: normalizedBenefits,
       syncMeta: { tombstones: normalizeTombstones(base) }
     };
   }
@@ -188,6 +220,13 @@
     };
     SYNC_COLLECTIONS.forEach(kind => {
       merged[kind] = mergeEntityCollection(kind, local[kind], remote[kind], tombstones[kind], prefer);
+    });
+    merged.benefits = {};
+    ['food','fuel'].forEach(key => {
+      const l = local.benefits?.[key] || DEFAULT_BENEFITS[key];
+      const r = remote.benefits?.[key] || DEFAULT_BENEFITS[key];
+      const lt = Number(l._updatedAt || 0), rt = Number(r._updatedAt || 0);
+      merged.benefits[key] = lt > rt ? l : (rt > lt ? r : (prefer === 'local' ? l : r));
     });
     return normalizeState(merged);
   }
@@ -293,6 +332,51 @@
     const target = new Date(y, m - 1 + offset, 1);
     const last = new Date(target.getFullYear(), target.getMonth()+1, 0).getDate();
     return `${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}-${String(Math.min(d,last)).padStart(2,'0')}`;
+  }
+  function monthIndex(month) {
+    if (!month) return 0;
+    const [y,m] = month.split('-').map(Number);
+    return y * 12 + (m - 1);
+  }
+  function isBenefitPayment(payment) { return payment === 'Vale Alimentação' || payment === 'Vale Combustível'; }
+  function benefitKeyFromPayment(payment) { return payment === 'Vale Alimentação' ? 'food' : (payment === 'Vale Combustível' ? 'fuel' : null); }
+  function benefitByKey(key) { return state.benefits?.[key] || DEFAULT_BENEFITS[key] || null; }
+  function benefitCreditCountUntil(key, dateStr = todayDateStr()) {
+    const benefit = benefitByKey(key);
+    if (!benefit || !dateStr) return 0;
+    const targetMonth = monthOf(dateStr);
+    const start = benefit.nextCreditMonth || shiftMonth(benefit.baseMonth || currentMonth(), 1);
+    let count = monthIndex(targetMonth) - monthIndex(start) + 1;
+    if (count <= 0) return 0;
+    const day = Number(dateStr.slice(8,10) || 1);
+    if (day < Number(benefit.creditDay || 1)) count -= 1;
+    return Math.max(0, count);
+  }
+  function benefitTrackedSpend(key, dateLimit = todayDateStr()) {
+    const benefit = benefitByKey(key);
+    if (!benefit) return 0;
+    return sum(state.transactions
+      .filter(t => t.type === 'expense' && t.payment === benefit.payment && t.benefitTracked === true && (!dateLimit || t.date <= dateLimit))
+      .map(t => t.amount));
+  }
+  function benefitCurrentBalance(key, dateStr = todayDateStr()) {
+    const benefit = benefitByKey(key);
+    if (!benefit) return 0;
+    const credits = benefitCreditCountUntil(key, dateStr) * Number(benefit.monthlyCredit || 0);
+    return Math.round((Number(benefit.baseBalance || 0) + credits - benefitTrackedSpend(key, dateStr)) * 100) / 100;
+  }
+  function benefitNextCreditDate(key, dateStr = todayDateStr()) {
+    const benefit = benefitByKey(key);
+    if (!benefit) return '';
+    const todayMonth = monthOf(dateStr);
+    const todayDay = Number(dateStr.slice(8,10) || 1);
+    let targetMonth = benefit.nextCreditMonth || shiftMonth(benefit.baseMonth || currentMonth(), 1);
+    if (monthIndex(todayMonth) > monthIndex(targetMonth)) targetMonth = todayMonth;
+    if (monthIndex(todayMonth) === monthIndex(targetMonth) && todayDay >= Number(benefit.creditDay || 1)) targetMonth = shiftMonth(todayMonth, 1);
+    const [y,m] = targetMonth.split('-').map(Number);
+    const last = new Date(y,m,0).getDate();
+    const day = Math.min(Number(benefit.creditDay || 1), last);
+    return `${targetMonth}-${String(day).padStart(2,'0')}`;
   }
   function cardById(id) { return state.cards.find(c => c.id === id) || null; }
   function invoiceMonthFor(card, dateStr, preferredDueDate = '') {
@@ -437,11 +521,12 @@
     const expenses = tx.filter(t => t.type === 'expense');
     const paidExpenses = expenses.filter(t => effectiveTransactionStatus(t) === 'paid');
     const pendingExpenses = expenses.filter(t => effectiveTransactionStatus(t) === 'pending');
+    const pendingCashExpenses = pendingExpenses.filter(t => !isBenefitPayment(t.payment));
 
     const incomeTotal = sum(receivedIncome.map(t=>t.amount));
     const expenseTotal = sum(expenses.map(t=>t.amount));
     const paidExpenseTotal = sum(paidExpenses.map(t=>t.amount));
-    const pendingExpenseTotal = sum(pendingExpenses.map(t=>t.amount));
+    const pendingExpenseTotal = sum(pendingCashExpenses.map(t=>t.amount));
     const resourcesTotal = sum(state.accounts.map(a => a.balance));
 
     // Planejamento financeiro baseado na posição real informada em Recursos.
@@ -462,7 +547,7 @@
     els.monthBalance.textContent = `Saldo após pendências ${money.format(plannedResult)}`;
     els.incomeCount.textContent = `${state.accounts.length} ${state.accounts.length === 1 ? 'recurso cadastrado' : 'recursos cadastrados'}`;
     els.expenseCount.textContent = `${expenses.length} ${expenses.length === 1 ? 'despesa' : 'despesas'} no mês`;
-    els.pendingCount.textContent = `${pendingExpenses.length} ${pendingExpenses.length === 1 ? 'conta pendente' : 'contas pendentes'}`;
+    els.pendingCount.textContent = `${pendingCashExpenses.length} ${pendingCashExpenses.length === 1 ? 'conta pendente' : 'contas pendentes'}`;
 
     if (els.plannedExpenseTotal) els.plannedExpenseTotal.textContent = money.format(expenseTotal);
     if (els.paidExpenseTotal) els.paidExpenseTotal.textContent = money.format(paidExpenseTotal);
@@ -470,7 +555,7 @@
     if (els.expenseCommitment) els.expenseCommitment.textContent = `${commitment.toFixed(0)}% dos recursos`;
     if (els.expenseProgressBar) els.expenseProgressBar.style.width = `${Math.min(commitment,100)}%`;
 
-    renderPending(pendingExpenses);
+    renderPending(pendingCashExpenses);
     renderRecent();
     drawCategoryChart(expenses);
   }
@@ -582,10 +667,12 @@
   }
   function updateTransactionCreditFields() {
     const credit = transactionIsCreditExpense();
+    const benefit = $('input[name="txType"]:checked')?.value === 'expense' && isBenefitPayment($('#txPayment').value);
     const dueNode = $('#txDueDate');
     $('#txCardField').classList.toggle('hidden', !credit);
     $('#txInstallmentsField').classList.toggle('hidden', !credit || Boolean($('#transactionId').value));
     $('#txCreditHint').classList.toggle('hidden', !credit);
+    $('#txBenefitHint')?.classList.toggle('hidden', !benefit);
     if (credit) {
       if (!$('#transactionId').value) $('#txStatus').value = 'pending';
       populateCardSelects();
@@ -595,6 +682,14 @@
       // remova apenas o valor automático. Datas informadas manualmente permanecem.
       dueNode.value = '';
       delete dueNode.dataset.creditAuto;
+    }
+    if (benefit) {
+      $('#txStatus').value = 'paid';
+      dueNode.value = '';
+      delete dueNode.dataset.creditAuto;
+      const key = benefitKeyFromPayment($('#txPayment').value);
+      const hint = $('#txBenefitHint');
+      if (hint) hint.textContent = `Débito direto do ${$('#txPayment').value}. Saldo atual: ${money.format(benefitCurrentBalance(key))}. Esse gasto não reduz seu saldo disponível em dinheiro.`;
     }
   }
   function openTransaction(id=null) {
@@ -637,14 +732,17 @@
     const existing=state.transactions.find(t=>t.id===existingId);
     const cardId=payment==='Crédito' ? ($('#txCard').value || null) : null;
     const card=cardById(cardId);
+    const benefitExpense = type === 'expense' && isBenefitPayment(payment);
     if (payment==='Crédito' && type==='expense' && !card) { toast('Cadastre e selecione um cartão para compras no crédito.'); return; }
 
     const baseDescription=$('#txDescription').value.trim();
     const requestedDueDate=$('#txDueDate').value;
-    const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:$('#txStatus').value,payment,dueDate:requestedDueDate,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
+    const base={date,type,description:baseDescription,category:$('#txCategory').value,amount,status:benefitExpense?'paid':$('#txStatus').value,payment,dueDate:benefitExpense?'':requestedDueDate,notes:$('#txNotes').value.trim(),recurringId:existing?.recurringId||null};
 
     if (existing) {
       const updated=touchEntity({...existing,...base,cardId});
+      const existingWasBenefit = existing.type === 'expense' && isBenefitPayment(existing.payment);
+      updated.benefitTracked = benefitExpense ? (existingWasBenefit ? existing.benefitTracked === true : true) : false;
       if (payment==='Crédito' && type==='expense') {
         updated.purchaseDate=existing.purchaseDate || date;
         updated.invoiceMonth=existing.installmentTotal>1 ? existing.invoiceMonth : invoiceMonthFor(card,date,requestedDueDate);
@@ -655,7 +753,12 @@
       const idx=state.transactions.findIndex(t=>t.id===existing.id);
       state.transactions[idx]=updated;
       saveState(); closeDialog(els.transactionModal); renderAll();
-      toast(updated.cardId ? `Lançamento atualizado • ${card.name} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento atualizado.');
+      if (benefitExpense) {
+        const key = benefitKeyFromPayment(payment);
+        toast(`${payment} • saldo ${money.format(benefitCurrentBalance(key))}`);
+      } else {
+        toast(updated.cardId ? `Lançamento atualizado • ${card.name} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento atualizado.');
+      }
       return;
     }
 
@@ -687,7 +790,7 @@
       return;
     }
 
-    const tx=touchEntity({id:uid(),...base,cardId:null,invoiceMonth:null,purchaseDate:null,installmentGroupId:null,installmentNumber:0,installmentTotal:0});
+    const tx=touchEntity({id:uid(),...base,cardId:null,invoiceMonth:null,purchaseDate:null,installmentGroupId:null,installmentNumber:0,installmentTotal:0,benefitTracked:benefitExpense});
     if (payment==='Crédito' && type==='expense') {
       tx.cardId=cardId;
       tx.purchaseDate=date;
@@ -697,10 +800,15 @@
     }
     state.transactions.push(tx);
     saveState(); closeDialog(els.transactionModal); renderAll();
-    toast(tx.cardId ? `Compra vinculada ao ${card.name} • fatura ${monthLabel(tx.invoiceMonth)} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento salvo.');
+    if (benefitExpense) {
+      const key = benefitKeyFromPayment(payment);
+      toast(`${payment} • saldo restante ${money.format(benefitCurrentBalance(key))}`);
+    } else {
+      toast(tx.cardId ? `Compra vinculada ao ${card.name} • fatura ${monthLabel(tx.invoiceMonth)} • limite livre ${money.format(cardAvailableLimit(card.id))}` : 'Lançamento salvo.');
+    }
   }
   function deleteTransaction(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(!confirm(`Excluir “${t.description}”?`))return;state.transactions=state.transactions.filter(x=>x.id!==id);markDeleted('transactions',id);saveState();renderAll();toast('Lançamento excluído.');}
-  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&t.cardId){toast('Compras no crédito são quitadas pela fatura do cartão.');return;}t.status=t.status==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
+  function toggleTransactionStatus(id){const t=state.transactions.find(x=>x.id===id);if(!t)return;if(t.type==='expense'&&t.cardId){toast('Compras no crédito são quitadas pela fatura do cartão.');return;}if(t.type==='expense'&&isBenefitPayment(t.payment)){toast('Gastos com vale são debitados diretamente do saldo do benefício.');return;}t.status=t.status==='paid'?'pending':'paid';t._updatedAt=nowStamp();saveState();renderAll();toast(t.status==='paid'?'Marcado como pago/recebido.':'Marcado como pendente.');}
 
   function recurringKindLabel(kind) {
     return ({fixed:'Conta fixa',subscription:'Assinatura',internet:'Chip / internet',income:'Receita recorrente',other:'Recorrente'})[kind] || 'Recorrente';
@@ -809,7 +917,8 @@
       const day=Math.min(Number(r.day||1),lastDay);
       const baseDate=`${month}-${String(day).padStart(2,'0')}`;
       const card=r.payment==='Crédito'?cardById(r.cardId):null;
-      let invoiceMonth=null, dueDate=baseDate, status='pending';
+      const benefitExpense = r.type === 'expense' && isBenefitPayment(r.payment);
+      let invoiceMonth=null, dueDate=benefitExpense?'':baseDate, status=benefitExpense?'paid':'pending';
       if(card && r.type==='expense'){
         invoiceMonth=month;
         dueDate=invoiceDueDate(card,invoiceMonth);
@@ -818,7 +927,7 @@
         id:`rec-${r.id}-${month}`,date:baseDate,type:r.type,category:r.category,description:r.description,amount:Number(r.amount),
         status,payment:r.payment,dueDate,notes:r.provider?`Cobrança recorrente • ${r.provider}`:'Gerado a partir de recorrência',
         recurringId:r.id,cardId:card?.id||null,invoiceMonth,purchaseDate:card?baseDate:null,
-        installmentGroupId:null,installmentNumber:0,installmentTotal:0
+        installmentGroupId:null,installmentNumber:0,installmentTotal:0,benefitTracked:benefitExpense
       }));
       created++;
     });
@@ -955,10 +1064,21 @@
     const fuelVoucher=monthExpenses.filter(t=>t.payment==='Vale Combustível');
     const foodTotal=sum(foodVoucher.map(t=>t.amount));
     const fuelTotal=sum(fuelVoucher.map(t=>t.amount));
+    const foodBenefit=benefitByKey('food');
+    const fuelBenefit=benefitByKey('fuel');
+    const foodBalance=benefitCurrentBalance('food');
+    const fuelBalance=benefitCurrentBalance('fuel');
+
+    if(els.foodVoucherBalance) els.foodVoucherBalance.textContent=money.format(foodBalance);
+    if(els.fuelVoucherBalance) els.fuelVoucherBalance.textContent=money.format(fuelBalance);
+    if(els.foodVoucherMonthly) els.foodVoucherMonthly.textContent=money.format(foodBenefit.monthlyCredit);
+    if(els.fuelVoucherMonthly) els.fuelVoucherMonthly.textContent=money.format(fuelBenefit.monthlyCredit);
     if(els.foodVoucherSpent) els.foodVoucherSpent.textContent=money.format(foodTotal);
     if(els.fuelVoucherSpent) els.fuelVoucherSpent.textContent=money.format(fuelTotal);
     if(els.foodVoucherCount) els.foodVoucherCount.textContent=`${foodVoucher.length} ${foodVoucher.length===1?'gasto registrado':'gastos registrados'}`;
     if(els.fuelVoucherCount) els.fuelVoucherCount.textContent=`${fuelVoucher.length} ${fuelVoucher.length===1?'gasto registrado':'gastos registrados'}`;
+    if(els.foodVoucherNext) els.foodVoucherNext.textContent=`próximo crédito ${formatDate(benefitNextCreditDate('food'))}`;
+    if(els.fuelVoucherNext) els.fuelVoucherNext.textContent=`próximo crédito ${formatDate(benefitNextCreditDate('fuel'))}`;
 
     els.accountsGrid.innerHTML=state.accounts.map(a=>`<article class="card data-card"><div class="data-card-head"><div><strong>${escapeHtml(a.name)}</strong><span>Recurso disponível</span></div><div class="row-actions"><button class="mini-btn" data-acc-edit="${a.id}">✎</button><button class="mini-btn" data-acc-delete="${a.id}">×</button></div></div><div class="data-card-value">${money.format(a.balance)}</div><div class="data-card-foot"><span>Atualize quando necessário</span><span>posição manual</span></div></article>`).join('');
     $$('[data-acc-edit]').forEach(b=>b.addEventListener('click',()=>openAccount(b.dataset.accEdit)));

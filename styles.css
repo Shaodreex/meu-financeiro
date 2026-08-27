@@ -230,3 +230,18 @@ html[data-theme="dark"] .auth-brand .brand-mark-shaodree{background:#e8eef7!impo
 .benefit-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}
 .benefit-summary{min-height:108px}
 @media(max-width:560px){.benefit-summary-grid{grid-template-columns:1fr}}
+
+/* v2.6 — saldos separados de Vale Alimentação e Vale Combustível */
+.benefit-wallet{padding:19px 20px;display:grid;gap:14px;min-height:178px}
+.benefit-wallet-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.benefit-wallet-head>div{display:grid;gap:3px}
+.benefit-label{font-size:13px;font-weight:800;color:var(--text)}
+.benefit-wallet-head small,.benefit-wallet-meta,.benefit-wallet-foot small{color:var(--muted);font-size:11px}
+.benefit-chip{display:grid;place-items:center;min-width:34px;height:30px;padding:0 9px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);font-size:11px;font-weight:900;letter-spacing:.04em}
+.benefit-balance{font-size:29px;letter-spacing:-.04em;line-height:1;color:var(--text)}
+.benefit-wallet-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-top:1px}
+.benefit-wallet-meta strong{color:var(--text)}
+.benefit-wallet-foot{border-top:1px solid var(--line);padding-top:11px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.benefit-wallet-foot strong{color:var(--text)}
+html[data-theme="dark"] .benefit-chip{background:#172033;border-color:#2a3950;color:#dce7f5}
+@media(max-width:560px){.benefit-wallet{min-height:168px}.benefit-balance{font-size:27px}.benefit-wallet-meta,.benefit-wallet-foot{align-items:flex-start;flex-direction:column;gap:5px}}
