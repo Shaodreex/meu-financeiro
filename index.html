@@ -258,7 +258,38 @@
     </main>
   </div>
 
+  <button id="mobileQuickExpenseBtn" class="mobile-quick-expense" type="button" aria-label="Registrar gasto rápido">
+    <span aria-hidden="true">＋</span><strong>Gasto rápido</strong>
+  </button>
+
   <div id="modalBackdrop" class="modal-backdrop hidden"></div>
+
+  <dialog id="quickExpenseModal" class="modal small-modal quick-expense-modal">
+    <form id="quickExpenseForm" method="dialog">
+      <div class="modal-head">
+        <div><p class="eyebrow">ATALHO</p><h2>Gasto rápido</h2><p class="quick-expense-subtitle">Registre uma despesa feita agora com poucos toques.</p></div>
+        <button type="button" class="icon-btn close-quick-expense" aria-label="Fechar">×</button>
+      </div>
+      <label class="quick-amount-field">
+        <span>R$</span>
+        <input id="quickExpenseAmount" inputmode="decimal" autocomplete="off" placeholder="0,00" required aria-label="Valor do gasto" />
+      </label>
+      <div class="form-grid one-col quick-expense-fields">
+        <label class="field"><span>Categoria</span><select id="quickExpenseCategory" required></select></label>
+        <label class="field"><span>Forma de pagamento</span><select id="quickExpensePayment">
+          <option>Pix</option><option>Débito</option><option>Crédito</option><option>Vale Alimentação</option><option>Vale Combustível</option><option>Dinheiro</option><option>Boleto</option><option>Transferência</option><option>Outro</option>
+        </select></label>
+        <label class="field hidden" id="quickExpenseCardField"><span>Cartão</span><select id="quickExpenseCard"></select></label>
+        <label class="field" id="quickExpenseAccountField"><span>Pago com recurso</span><select id="quickExpenseAccount"></select></label>
+        <label class="field"><span>Descrição <small>(opcional)</small></span><input id="quickExpenseDescription" maxlength="80" placeholder="Ex.: Café, estacionamento, mercado" /></label>
+        <div id="quickExpenseHint" class="form-hint">Este atalho registra um gasto já realizado. Para contas pendentes ou parceladas, use “Novo lançamento”.</div>
+      </div>
+      <div class="modal-actions quick-expense-actions">
+        <button type="button" class="btn btn-secondary close-quick-expense">Cancelar</button>
+        <button type="submit" class="btn btn-primary">Salvar gasto</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="transactionModal" class="modal">
     <form id="transactionForm" method="dialog">

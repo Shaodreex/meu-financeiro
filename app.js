@@ -63,7 +63,7 @@
     foodVoucherBalance: $('#foodVoucherBalance'), foodVoucherMonthly: $('#foodVoucherMonthly'), foodVoucherSpent: $('#foodVoucherSpent'), foodVoucherCount: $('#foodVoucherCount'), foodVoucherNext: $('#foodVoucherNext'),
     fuelVoucherBalance: $('#fuelVoucherBalance'), fuelVoucherMonthly: $('#fuelVoucherMonthly'), fuelVoucherSpent: $('#fuelVoucherSpent'), fuelVoucherCount: $('#fuelVoucherCount'), fuelVoucherNext: $('#fuelVoucherNext'),
     categoryTags: $('#categoryTags'),
-    transactionModal: $('#transactionModal'), recurringModal: $('#recurringModal'), cardModal: $('#cardModal'), accountModal: $('#accountModal'),
+    transactionModal: $('#transactionModal'), quickExpenseModal: $('#quickExpenseModal'), recurringModal: $('#recurringModal'), cardModal: $('#cardModal'), accountModal: $('#accountModal'),
     paymentSourceModal: $('#paymentSourceModal'), iosInstallModal: $('#iosInstallModal'),
     modalBackdrop: $('#modalBackdrop'), toast: $('#toast'),
     authGate: $('#authGate'), authMessage: $('#authMessage'), syncStatusText: $('#syncStatusText'),
@@ -502,6 +502,10 @@
 
   function bindActions() {
     $('#quickAddBtn').addEventListener('click', () => openTransaction());
+    $('#mobileQuickExpenseBtn')?.addEventListener('click', openQuickExpense);
+    $('#quickExpenseForm')?.addEventListener('submit', saveQuickExpense);
+    $('#quickExpensePayment')?.addEventListener('change', updateQuickExpenseFields);
+    $('#quickExpenseCard')?.addEventListener('change', updateQuickExpenseFields);
     $('#transactionSearch').addEventListener('input', renderTransactions);
     $('#typeFilter').addEventListener('change', renderTransactions);
     $('#statusFilter').addEventListener('change', renderTransactions);
@@ -536,18 +540,19 @@
 
   function bindModals() {
     $$('.close-modal').forEach(b => b.addEventListener('click', () => closeDialog(els.transactionModal)));
+    $$('.close-quick-expense').forEach(b => b.addEventListener('click', () => closeDialog(els.quickExpenseModal)));
     $$('.close-recurring').forEach(b => b.addEventListener('click', () => closeDialog(els.recurringModal)));
     $$('.close-account').forEach(b => b.addEventListener('click', () => closeDialog(els.accountModal)));
     $$('.close-card').forEach(b => b.addEventListener('click', () => closeDialog(els.cardModal)));
     $$('.close-payment-source').forEach(b => b.addEventListener('click', () => { pendingPaymentAction = null; closeDialog(els.paymentSourceModal); }));
     els.modalBackdrop.addEventListener('click', closeAllDialogs);
-    [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].forEach(d => d.addEventListener('close', updateBackdrop));
+    [els.transactionModal, els.quickExpenseModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].filter(Boolean).forEach(d => d.addEventListener('close', updateBackdrop));
     $$('.close-ios-install').forEach(b => b.addEventListener('click', () => closeDialog(els.iosInstallModal)));
   }
   function showDialog(d) { els.modalBackdrop.classList.remove('hidden'); if (!d.open) d.showModal(); }
   function closeDialog(d) { if (d.open) d.close(); updateBackdrop(); }
-  function closeAllDialogs() { pendingPaymentAction = null; [els.transactionModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].forEach(d => { if (d.open) d.close(); }); updateBackdrop(); }
-  function updateBackdrop() { if (![els.transactionModal,els.recurringModal,els.cardModal,els.accountModal,els.paymentSourceModal,els.iosInstallModal].some(d => d.open)) els.modalBackdrop.classList.add('hidden'); }
+  function closeAllDialogs() { pendingPaymentAction = null; [els.transactionModal, els.quickExpenseModal, els.recurringModal, els.cardModal, els.accountModal, els.paymentSourceModal, els.iosInstallModal].filter(Boolean).forEach(d => { if (d.open) d.close(); }); updateBackdrop(); }
+  function updateBackdrop() { if (![els.transactionModal,els.quickExpenseModal,els.recurringModal,els.cardModal,els.accountModal,els.paymentSourceModal,els.iosInstallModal].filter(Boolean).some(d => d.open)) els.modalBackdrop.classList.add('hidden'); }
 
   function renderAll() {
     renderDashboard(); renderTransactions(); renderRecurring(); renderCards(); renderAccounts(); renderSettings(); populateCategorySelects(); populateCardSelects(); updateTransactionResourceFields();
@@ -796,14 +801,14 @@
   }
 
   function populateCategorySelects() {
-    ['#txCategory','#recCategory'].forEach(sel => {
+    ['#txCategory','#recCategory','#quickExpenseCategory'].forEach(sel => {
       const node=$(sel); const current=node.value;
       node.innerHTML=state.categories.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       if (state.categories.includes(current)) node.value=current;
     });
   }
   function populateCardSelects() {
-    ['#txCard','#recCard'].forEach(sel => {
+    ['#txCard','#recCard','#quickExpenseCard'].forEach(sel => {
       const node = $(sel);
       if (!node) return;
       const current = node.value;
@@ -858,6 +863,116 @@
     }
     updateTransactionResourceFields();
   }
+  function openQuickExpense() {
+    populateCategorySelects();
+    populateCardSelects();
+    const form = $('#quickExpenseForm');
+    if (!form || !els.quickExpenseModal) return;
+    form.reset();
+    $('#quickExpensePayment').value = 'Pix';
+    populateAccountSelect($('#quickExpenseAccount'));
+    updateQuickExpenseFields();
+    showDialog(els.quickExpenseModal);
+    setTimeout(() => $('#quickExpenseAmount')?.focus(), 90);
+  }
+
+  function updateQuickExpenseFields() {
+    const payment = $('#quickExpensePayment')?.value || 'Pix';
+    const credit = payment === 'Crédito';
+    const benefit = isBenefitPayment(payment);
+    const cardField = $('#quickExpenseCardField');
+    const accountField = $('#quickExpenseAccountField');
+    const hint = $('#quickExpenseHint');
+    if (cardField) cardField.classList.toggle('hidden', !credit);
+    if (accountField) accountField.classList.toggle('hidden', credit || benefit);
+
+    if (credit) {
+      populateCardSelects();
+      const card = cardById($('#quickExpenseCard')?.value);
+      if (hint) {
+        hint.textContent = card
+          ? `Compra na fatura ${monthLabel(currentMonth())} • vencimento ${formatDate(invoiceDueDate(card, currentMonth()))}. Para parcelar, use “Novo lançamento”.`
+          : 'Selecione um cartão. Para parcelar, use “Novo lançamento”.';
+      }
+      return;
+    }
+
+    if (benefit) {
+      const key = benefitKeyFromPayment(payment);
+      if (hint) hint.textContent = `${payment} • saldo disponível ${money.format(benefitCurrentBalance(key))}. O valor será baixado do benefício.`;
+      return;
+    }
+
+    populateAccountSelect($('#quickExpenseAccount'));
+    if (hint) hint.textContent = 'O gasto será marcado como pago e baixado imediatamente do recurso selecionado.';
+  }
+
+  function saveQuickExpense(e) {
+    e.preventDefault();
+    const amount = parseAmount($('#quickExpenseAmount')?.value || '');
+    if (!(amount > 0)) { toast('Informe um valor válido.'); return; }
+
+    const category = $('#quickExpenseCategory')?.value || state.categories[0] || 'Outros';
+    const payment = $('#quickExpensePayment')?.value || 'Pix';
+    const description = ($('#quickExpenseDescription')?.value || '').trim() || category;
+    const date = todayDateStr();
+    const benefitExpense = isBenefitPayment(payment);
+    const cardId = payment === 'Crédito' ? ($('#quickExpenseCard')?.value || '') : '';
+    const card = cardById(cardId);
+
+    if (payment === 'Crédito' && !card) {
+      toast('Cadastre e selecione um cartão para usar Crédito.');
+      return;
+    }
+
+    const tx = touchEntity({
+      id: uid(),
+      date,
+      type: 'expense',
+      description,
+      category,
+      amount,
+      status: payment === 'Crédito' ? 'pending' : 'paid',
+      payment,
+      dueDate: '',
+      notes: '',
+      recurringId: null,
+      cardId: null,
+      invoiceMonth: null,
+      purchaseDate: null,
+      installmentGroupId: null,
+      installmentNumber: 0,
+      installmentTotal: 0,
+      benefitTracked: benefitExpense
+    });
+
+    if (payment === 'Crédito') {
+      tx.cardId = card.id;
+      tx.purchaseDate = date;
+      tx.invoiceMonth = invoiceMonthFor(card, date);
+      tx.dueDate = invoiceDueDate(card, tx.invoiceMonth);
+    } else if (!benefitExpense) {
+      const accountId = $('#quickExpenseAccount')?.value || '';
+      const result = applyTransactionSettlement(tx, accountId, amount);
+      if (!result.ok) { toast(result.message); return; }
+    }
+
+    state.transactions.push(tx);
+    saveState();
+    closeDialog(els.quickExpenseModal);
+    renderAll();
+
+    if (payment === 'Crédito') {
+      toast(`Gasto salvo • ${card.name} • fatura ${monthLabel(tx.invoiceMonth)}.`);
+    } else if (benefitExpense) {
+      const key = benefitKeyFromPayment(payment);
+      toast(`${payment} • saldo restante ${money.format(benefitCurrentBalance(key))}.`);
+    } else {
+      const account = accountById(tx.resourceAccountId);
+      toast(`Gasto salvo • ${account?.name || 'recurso'} • saldo ${money.format(account?.balance || 0)}.`);
+    }
+  }
+
   function openTransaction(id=null) {
     populateCategorySelects();
     populateCardSelects();

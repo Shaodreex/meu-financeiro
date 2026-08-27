@@ -252,3 +252,28 @@ html[data-theme="dark"] .benefit-chip{background:#172033;border-color:#2a3950;co
 .payment-source-summary strong{font-size:1.25rem;white-space:nowrap}
 
 .danger-text{color:var(--red)!important}
+
+/* v2.8 — lançamento rápido para celular */
+.mobile-quick-expense{display:none}
+.quick-expense-subtitle{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
+.quick-amount-field{display:flex;align-items:center;gap:9px;border:1px solid var(--line);background:var(--surface-2);border-radius:16px;padding:10px 14px;margin-bottom:15px}
+.quick-amount-field>span{font-weight:850;color:var(--muted);font-size:18px}
+.quick-amount-field input{min-width:0;flex:1;border:0!important;outline:0!important;background:transparent!important;box-shadow:none!important;padding:4px 0!important;font-size:34px!important;font-weight:850;letter-spacing:-1px;color:var(--text);line-height:1.1}
+.quick-amount-field input::placeholder{color:#a7b1bf}
+.quick-expense-fields{gap:11px}
+.quick-expense-fields .form-hint{margin-top:1px}
+.quick-expense-actions{margin-top:17px}
+
+@media(max-width:760px){
+  .mobile-quick-expense{position:fixed;right:15px;bottom:calc(15px + env(safe-area-inset-bottom));z-index:35;display:flex;align-items:center;gap:7px;border:0;border-radius:999px;background:var(--primary);color:#fff;padding:13px 17px 13px 14px;box-shadow:0 12px 28px rgba(15,23,42,.26);font-size:12px}
+  .mobile-quick-expense>span{font-size:20px;line-height:1;font-weight:500}
+  .mobile-quick-expense>strong{font-size:12px;white-space:nowrap}
+  .mobile-quick-expense:active{transform:scale(.97)}
+  .quick-expense-modal{position:fixed;inset:auto 10px max(10px,env(safe-area-inset-bottom)) 10px;width:auto;max-height:calc(100dvh - 70px - env(safe-area-inset-top));margin:0;border-radius:24px 24px 18px 18px}
+  .quick-expense-modal form{padding:19px 18px 16px}
+  .quick-expense-modal .modal-actions{padding-bottom:max(2px,env(safe-area-inset-bottom))}
+  .quick-amount-field input{font-size:38px!important}
+  .toast{bottom:calc(80px + env(safe-area-inset-bottom));left:14px;right:14px;text-align:center}
+}
+html[data-theme="dark"] .quick-amount-field{background:#0f172a;border-color:#314057}
+html[data-theme="dark"] .mobile-quick-expense{box-shadow:0 12px 30px rgba(0,0,0,.42)}
